@@ -38,8 +38,9 @@ const startServer = async () => {
     res.json({ success: true, data: 'Protected content accessed successfully!' });
   });
 
-  app.listen(3000, () => {
-    console.log('x402 payment server running on port 3000');
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`x402 payment server running on port ${port}`);
   });
 };
 
