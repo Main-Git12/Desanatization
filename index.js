@@ -10,7 +10,9 @@ import { paymentMiddlewareFromHTTPServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { createLogger } from './logger.js';
 import { loadConfig } from './config.js';
-import { assignRequestId, validatePaymentHeaders } from './middleware/validation.js';
+import { assignRequestId } from './middleware/validation.js';
+import { createRateLimiter, createPaymentRateLimiter } from './middleware/rateLimiter.js';
+import { trackRequests, metricsEndpoint } from './middleware/monitoring.js';
 
 dotenv.config();
 
@@ -25,6 +27,9 @@ const app = express();
 // Assign unique request ID for tracking
 app.use(assignRequestId);
 
+// Request tracking and monitoring
+app.use(trackRequests);
+
 app.use(cors({
   origin: config.allowedOrigins,
   credentials: true,
@@ -33,6 +38,9 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// General rate limiter
+app.use(createRateLimiter());
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -48,9 +56,16 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    environment: config.environment
   });
 });
+
+// ============================================================================
+// Metrics Endpoint
+// ============================================================================
+
+app.get('/metrics', metricsEndpoint);
 
 // ============================================================================
 // Initialize x402 Server
@@ -93,6 +108,10 @@ const startServer = async () => {
 
     // 3. Create HTTP server and bind payment middleware to Express
     httpServer = new x402HTTPResourceServer(resourceServer, routes);
+    
+    // Apply payment rate limiter before payment middleware
+    app.use('/api/resource', createPaymentRateLimiter());
+    
     app.use(paymentMiddlewareFromHTTPServer(httpServer));
 
     // Protected resource endpoint
