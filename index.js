@@ -1,49 +1,63 @@
 import express from 'express';
-import { paymentMiddleware } from '@x402/express';
-import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
 app.use(express.json());
 
-// 1. Initialize the facilitator client
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: 'https://x402.org/facilitator',
-});
+// Initialize the exact EVM scheme handler directly
+const evmScheme = new ExactEvmScheme();
 
-// 2. Initialize the resource server
-const server = new x402ResourceServer(facilitatorClient);
+// Custom lightweight middleware that validates the payment header locally
+const localPaymentMiddleware = (config) => {
+  return async (req, res, next) => {
+    const paymentHeader = req.headers['x-402-payment'] || req.headers['authorization'];
+    
+    if (!paymentHeader) {
+      // Return 402 Payment Required with the structured requirements for the client
+      return res.status(402).json({
+        error: 'Payment Required',
+        accepts: config.accepts,
+      });
+    }
 
-// 3. Register the exact EVM scheme for Base Mainnet
-server.register('eip155:8453', new ExactEvmScheme());
+    try {
+      // Verify payment details locally on-chain/via scheme
+      const isValid = await evmScheme.verify(paymentHeader, config);
+      if (isValid) {
+        return next();
+      } else {
+        return res.status(402).json({ error: 'Invalid payment signature or amount' });
+      }
+    } catch (err) {
+      return res.status(500).json({ error: 'Payment verification failed', details: err.message });
+    }
+  };
+};
 
-// 4. Protect your endpoint with route-mapped payment requirements
-app.get(
-  '/api/premium-data',
-  paymentMiddleware(
+// Define payment configuration for Base Mainnet
+const paymentConfig = {
+  accepts: [
     {
-      'GET /api/premium-data': {
-        accepts: [
-          {
-            scheme: 'exact',
-            price: '$0.01',
-            network: 'eip155:8453',
-            payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
-          },
-        ],
-        description: 'Premium Data API Access',
-        mimeType: 'application/json',
-      },
+      scheme: 'exact',
+      price: '$0.01',
+      network: 'eip155:8453',
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
     },
-    server
-  ),
-  (req, res) => {
-    res.json({
-      success: true,
-      message: 'Paid content unlocked on Base Mainnet!',
-    });
-  }
-);
+  ],
+  amount: '10000',
+  asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
+  network: 'eip155:8453',
+};
+
+// Protect the endpoint using our direct local validator
+app.get('/api/premium-data', localPaymentMiddleware(paymentConfig), (req, res) => {
+  res.json({
+    success: true,
+    message: 'Paid content unlocked on Base Mainnet!',
+  });
+});
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
