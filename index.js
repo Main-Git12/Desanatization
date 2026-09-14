@@ -6,31 +6,26 @@ app.use(express.json());
 
 const evmScheme = new ExactEvmScheme();
 
-// Helper to encode payment requirements into the v2 PAYMENT-REQUIRED base64 header
+// Helper to encode payment requirements supporting both v2 payload structures
 const createPaymentRequiredHeader = (config) => {
   const payload = {
     x402Version: 2,
+    paymentRequirements: config.accepts,
     accepts: config.accepts,
   };
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 };
 
-// Properly structured payment requirements for @x402/fetch v2 client
 const paymentConfig = {
   accepts: [
     {
       scheme: 'exact',
-      price: '$0.01',
       network: 'eip155:8453',
-      amount: '10000', // Explicit atomic unit string for 0.01 USDC (6 decimals)
+      amount: '10000', // Exactly 0.01 USDC in atomic units (6 decimals)
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
       payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
     },
   ],
-  amount: '10000',
-  asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
-  network: 'eip155:8453',
 };
 
 app.get('/api/premium-data', async (req, res) => {
@@ -40,8 +35,9 @@ app.get('/api/premium-data', async (req, res) => {
     const base64Requirements = createPaymentRequiredHeader(paymentConfig);
     res.setHeader('PAYMENT-REQUIRED', base64Requirements);
     return res.status(402).json({
-      error: 'Payment Required',
-      message: 'Please provide a valid payment signature via the PAYMENT-SIGNATURE header.'
+      x402Version: 2,
+      paymentRequirements: paymentConfig.accepts,
+      accepts: paymentConfig.accepts,
     });
   }
 
