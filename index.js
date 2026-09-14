@@ -10,6 +10,7 @@ import { paymentMiddlewareFromHTTPServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { createLogger } from './logger.js';
 import { loadConfig } from './config.js';
+import { assignRequestId, validatePaymentHeaders } from './middleware/validation.js';
 
 dotenv.config();
 
@@ -20,6 +21,9 @@ const app = express();
 // ============================================================================
 // Middleware
 // ============================================================================
+
+// Assign unique request ID for tracking
+app.use(assignRequestId);
 
 app.use(cors({
   origin: config.allowedOrigins,
@@ -97,7 +101,8 @@ const startServer = async () => {
         res.json({ 
           success: true, 
           data: 'Protected content accessed successfully!',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          requestId: req.id
         });
       } catch (error) {
         next(error);
@@ -127,7 +132,9 @@ const startServer = async () => {
     app.use((req, res) => {
       res.status(404).json({ 
         error: 'Not found',
-        path: req.path 
+        path: req.path,
+        requestId: req.id,
+        timestamp: new Date().toISOString()
       });
     });
 
@@ -139,6 +146,8 @@ const startServer = async () => {
       logger.info(`x402 payment server running on ${config.host}:${config.port}`);
       logger.info(`Environment: ${config.environment}`);
       logger.info(`Facilitator: ${config.facilitatorUrl}`);
+      logger.info(`Network: ${config.network}`);
+      logger.info(`Payment address: ${config.payToAddress}`);
     });
 
     // ========================================================================
@@ -147,7 +156,6 @@ const startServer = async () => {
 
     const gracefulShutdown = (signal) => {
       logger.info(`${signal} signal received: closing HTTP server`);
-      
       server.close(() => {
         logger.info('HTTP server closed');
         process.exit(0);
