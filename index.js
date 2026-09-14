@@ -6,7 +6,9 @@ app.use(express.json());
 
 const evmScheme = new ExactEvmScheme();
 
-// Helper to encode payment requirements supporting both v2 payload structures
+// Valid Base Mainnet receiving wallet address
+const RECEIVING_WALLET = process.env.WALLET_ADDRESS || '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
+
 const createPaymentRequiredHeader = (config) => {
   const payload = {
     x402Version: 2,
@@ -21,9 +23,9 @@ const paymentConfig = {
     {
       scheme: 'exact',
       network: 'eip155:8453',
-      amount: '10000', // Exactly 0.01 USDC in atomic units (6 decimals)
-      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
+      amount: '10000', // 0.01 USDC (6 decimals)
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Base USDC Contract
+      payTo: RECEIVING_WALLET,
     },
   ],
 };
