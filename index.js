@@ -6,23 +6,21 @@ import { paymentMiddleware } from '@x402/express';
 const app = express();
 app.use(express.json());
 
-// 1. Connect to the facilitator
 const facilitatorUrl = process.env.FACILITATOR_URL || 'https://x402.org/facilitator';
 const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
 const server = new x402ResourceServer(facilitatorClient);
 
-// 2. Register the EVM exact payment scheme for Base network (eip155:8453)
+// Register for Base Sepolia Testnet
 registerExactEvmScheme(server, {
-  networks: ['eip155:8453'],
+  networks: ['eip155:84532'],
 });
 
-// 3. Monetized endpoint
 app.get('/api/premium-data', 
   paymentMiddleware({
     accepts: {
       scheme: 'exact',
       price: '$0.01',
-      network: 'eip155:8453',
+      network: 'eip155:84532', // Base Sepolia Testnet
       payTo: process.env.PAY_TO || '0xYourCryptoWalletAddress',
     },
     description: 'Access to premium data',
@@ -33,7 +31,7 @@ app.get('/api/premium-data',
 );
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'x402 micro-settlement server is live!' });
+  res.json({ status: 'ok', message: 'x402 testnet server is live!' });
 });
 
 const PORT = process.env.PORT || 8080;
