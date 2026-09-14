@@ -4,20 +4,25 @@ import { paymentMiddleware } from '@x402/express';
 const app = express();
 app.use(express.json());
 
-// Initialize the x402 payment middleware using the correct configuration schema
 app.use(
-  paymentMiddleware(process.env.WALLET_ADDRESS, {
-    'POST /api/v1/resource': {
-      accepts: [
-        {
-          scheme: 'exact',
-          price: '$0.01',
-          network: 'base',
-          currency: 'usdc'
-        }
-      ]
+  paymentMiddleware(
+    process.env.WALLET_ADDRESS, // Use a valid environment variable identifier here
+    {
+      'POST /api/v1/resource': {
+        accepts: [
+          {
+            scheme: 'exact',
+            price: '$0.01',
+            network: 'eip155:8453',
+            currency: 'usdc'
+          }
+        ]
+      }
+    },
+    {
+      url: process.env.FACILITATOR_URL
     }
-  })
+  )
 );
 
 app.post('/api/v1/resource', (req, res) => {
@@ -35,7 +40,7 @@ app.post('/api/v1/resource', (req, res) => {
     message: "Payment verified successfully on Base Mainnet.",
     resource_id: `res_${Date.now()}`,
     payment_required: false,
-    payment_network: network || "base",
+    payment_network: network || "eip155:8453",
     payment_currency: currency || "usdc"
   });
 });
