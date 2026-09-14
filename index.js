@@ -5,8 +5,6 @@ const app = express();
 app.use(express.json());
 
 const evmScheme = new ExactEvmScheme();
-
-// Explicitly use your verified public receiving wallet address
 const RECEIVING_WALLET = '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
 
 const createPaymentRequiredHeader = (config) => {
@@ -24,8 +22,11 @@ const paymentConfig = {
       scheme: 'exact',
       network: 'eip155:8453',
       amount: '10000', // 0.01 USDC (6 decimals)
-      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Base USDC Contract
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base Mainnet
       payTo: RECEIVING_WALLET,
+      // Required EIP-712 domain fields for USDC
+      name: 'USD Coin',
+      version: '2',
     },
   ],
 };
