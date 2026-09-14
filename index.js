@@ -24,9 +24,11 @@ const paymentConfig = {
       amount: '10000', // 0.01 USDC (6 decimals)
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base Mainnet
       payTo: RECEIVING_WALLET,
-      // Required EIP-712 domain fields for USDC
-      name: 'USD Coin',
-      version: '2',
+      // Nested under 'extra' so the client's ExactEvmScheme validator reads them correctly
+      extra: {
+        name: 'USD Coin',
+        version: '2',
+      },
     },
   ],
 };
