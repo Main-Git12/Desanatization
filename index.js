@@ -6,8 +6,8 @@ app.use(express.json());
 
 const evmScheme = new ExactEvmScheme();
 
-// Valid Base Mainnet receiving wallet address
-const RECEIVING_WALLET = process.env.WALLET_ADDRESS || '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
+// Explicitly use your verified public receiving wallet address
+const RECEIVING_WALLET = '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
 
 const createPaymentRequiredHeader = (config) => {
   const payload = {
