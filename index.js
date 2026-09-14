@@ -53,6 +53,9 @@ app.get('/health', (req, res) => {
 // ============================================================================
 
 const startServer = async () => {
+  let resourceServer;
+  let httpServer;
+
   try {
     // 1. Initialize the facilitator and resource server
     logger.info('Initializing facilitator client...');
@@ -60,7 +63,7 @@ const startServer = async () => {
       url: config.facilitatorUrl 
     });
     
-    const resourceServer = new x402ResourceServer(facilitatorClient);
+    resourceServer = new x402ResourceServer(facilitatorClient);
 
     // Register payment scheme
     logger.info('Registering EVM payment scheme...');
@@ -84,8 +87,8 @@ const startServer = async () => {
       },
     };
 
-    // 3. Bind to Express
-    const httpServer = new x402HTTPResourceServer(resourceServer, routes);
+    // 3. Create HTTP server and bind payment middleware to Express
+    httpServer = new x402HTTPResourceServer(resourceServer, routes);
     app.use(paymentMiddlewareFromHTTPServer(httpServer));
 
     // Protected resource endpoint
@@ -144,6 +147,7 @@ const startServer = async () => {
 
     const gracefulShutdown = (signal) => {
       logger.info(`${signal} signal received: closing HTTP server`);
+      
       server.close(() => {
         logger.info('HTTP server closed');
         process.exit(0);
