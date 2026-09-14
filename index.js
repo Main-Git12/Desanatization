@@ -4,13 +4,18 @@ import { paymentMiddleware } from '@x402/express';
 const app = express();
 app.use(express.json());
 
-// Initialize the x402 payment middleware with the correct route options object
+// Initialize the x402 payment middleware using the correct configuration schema
 app.use(
   paymentMiddleware(process.env.WALLET_ADDRESS, {
-    '/api/v1/resource': {
-      network: 'base',
-      currency: 'usdc',
-      amount: '0.01'
+    'POST /api/v1/resource': {
+      accepts: [
+        {
+          scheme: 'exact',
+          price: '$0.01',
+          network: 'base',
+          currency: 'usdc'
+        }
+      ]
     }
   })
 );
