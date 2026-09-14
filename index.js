@@ -1,47 +1,33 @@
 import express from 'express';
+import { paymentMiddleware } from '@x402/express';
 
 const app = express();
 app.use(express.json());
 
-// Express route implementing the /api/v1/resource endpoint with x402 payment challenge
-app.post('/api/v1/resource', (req, res) => {
-  const { service_name, endpoint_url, protocol, network, currency, pricing_per_request } = req.body;
+// Bind the x402 payment enforcement middleware to your route
+app.use(
+  paymentMiddleware(process.env.WALLET_ADDRESS, {
+    '/api/v1/resource': '$0.01'
+  })
+);
 
-  // Validate incoming broadcast payload
-  if (!service_name || !endpoint_url || !protocol || !network || !currency || !pricing_per_request) {
+app.post('/api/v1/resource', (req, res) => {
+  const { service_name, endpoint_url, protocol, network, currency } = req.body;
+
+  if (!service_name || !endpoint_url) {
     return res.status(400).json({
       success: false,
-      message: "Invalid request: missing required broadcast fields."
+      message: "Missing required payload fields."
     });
   }
 
-  // Check for settlement headers (x402 protocol)
-  const paymentHeader = req.headers['authorization'] || req.headers['x-payment'];
-  if (!paymentHeader) {
-    return res.status(402)
-      .setHeader('PAYMENT-REQUIRED', JSON.stringify({
-        network,
-        currency,
-        amount: pricing_per_request,
-        payTo: process.env.WALLET_ADDRESS || "0xYourWalletAddress"
-      }))
-      .json({
-        success: false,
-        payment_required: true,
-        payment_network: network,
-        payment_currency: currency,
-        message: "402 Payment Required: Settle micro-transaction via Base Mainnet USDC."
-      });
-  }
-
-  // Process successful authenticated request
   return res.status(200).json({
     success: true,
-    message: "Broadcast accepted and agent routing index updated.",
+    message: "Payment verified successfully on Base Mainnet.",
     resource_id: `res_${Date.now()}`,
     payment_required: false,
-    payment_network: network,
-    payment_currency: currency
+    payment_network: network || "base",
+    payment_currency: currency || "usdc"
   });
 });
 
