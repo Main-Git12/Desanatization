@@ -1,5 +1,5 @@
 {
-  "name": "x402-server",
+  "name": "x402-payment-server",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
@@ -7,8 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "@x402/core": "latest",
-    "@x402/express": "latest"
+    "@x402/express": "^latest",
+    "express": "^4.19.2"
   }
 }
