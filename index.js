@@ -1,40 +1,40 @@
 import express from 'express';
-import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
-import { registerExactEvmScheme } from '@x402/evm/exact/server';
-import { paymentMiddleware } from '@x402/express';
+import { x402Server, paymentMiddleware } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
 app.use(express.json());
 
-const facilitatorUrl = process.env.FACILITATOR_URL || 'https://x402.org/facilitator';
-const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
-const server = new x402ResourceServer(facilitatorClient);
-
-// Register for Base Sepolia Testnet
-registerExactEvmScheme(server, {
-  networks: ['eip155:84532'],
+// 1. Initialize the x402 payment server framework
+const x402 = new x402Server({
+  // Register the exact EVM payment scheme
+  schemes: {
+    exact: new ExactEvmScheme(),
+  },
 });
 
-app.get('/api/premium-data', 
-  paymentMiddleware({
-    accepts: {
-      scheme: 'exact',
-      price: '$0.01',
-      network: 'eip155:8453', // Base Sepolia Testnet
-      payTo: process.env.PAY_TO || '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-    },
-    description: 'Access to premium data',
-  }, server),
-  (req, res) => {
-    res.json({ success: true, message: 'Paid content unlocked!' });
-  }
-);
+// 2. Define your monetization rules for the premium route
+const paymentConfig = {
+  // Required payment amount (e.g., 0.01 USDC = 10000 units with 6 decimals)
+  amount: '10000', 
+  // Official Base Mainnet USDC Contract Address
+  asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', 
+  // Your live mainnet wallet address to receive funds
+  payTo: '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3', 
+  // Target network: Base Mainnet
+  network: 'eip155:8453', 
+  maxTimeoutSeconds: 300,
+};
 
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'x402 testnet server is live!' });
+// 3. Protect your endpoint with the x402 payment middleware
+app.get('/api/premium-data', paymentMiddleware(x402, paymentConfig), (req, res) => {
+  res.json({
+    success: true,
+    message: 'Paid content unlocked on Base Mainnet!',
+  });
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`x402 Payment Server running on port ${PORT}`);
 });
