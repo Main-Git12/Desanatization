@@ -6,33 +6,15 @@ app.use(express.json());
 
 const evmScheme = new ExactEvmScheme();
 
-// Middleware that matches the protocol's expected 402 challenge structure
-const x402ChallengeMiddleware = (config) => {
-  return async (req, res, next) => {
-    const paymentHeader = req.headers['x-402-payment'] || req.headers['authorization'];
-    
-    if (!paymentHeader) {
-      // Return the official x402 protocol specification payload for 402
-      return res.status(402).json({
-        x402Version: 1,
-        accepts: config.accepts,
-      });
-    }
-
-    try {
-      const isValid = await evmScheme.verify(paymentHeader, config);
-      if (isValid) {
-        return next();
-      } else {
-        return res.status(402).json({ error: 'Invalid payment signature' });
-      }
-    } catch (err) {
-      return res.status(500).json({ error: 'Payment verification failed', details: err.message });
-    }
+// Helper to encode payment requirements into the v2 PAYMENT-REQUIRED base64 header
+const createPaymentRequiredHeader = (config) => {
+  const payload = {
+    x402Version: 2,
+    accepts: config.accepts,
   };
+  return Buffer.from(JSON.stringify(payload)).toString('base64');
 };
 
-// Base Mainnet configuration matching client requirements
 const paymentConfig = {
   accepts: [
     {
@@ -49,11 +31,34 @@ const paymentConfig = {
   network: 'eip155:8453',
 };
 
-app.get('/api/premium-data', x402ChallengeMiddleware(paymentConfig), (req, res) => {
-  res.json({
-    success: true,
-    message: 'Paid content unlocked on Base Mainnet!',
-  });
+app.get('/api/premium-data', async (req, res) => {
+  // Check for the v2 client payment signature header
+  const paymentSignature = req.headers['payment-signature'] || req.headers['x-402-payment'] || req.headers['authorization'];
+
+  if (!paymentSignature) {
+    // Set the v2 PAYMENT-REQUIRED base64 header that @x402/fetch requires
+    const base64Requirements = createPaymentRequiredHeader(paymentConfig);
+    res.setHeader('PAYMENT-REQUIRED', base64Requirements);
+    return res.status(402).json({
+      error: 'Payment Required',
+      message: 'Please provide a valid payment signature via the PAYMENT-SIGNATURE header.'
+    });
+  }
+
+  try {
+    const isValid = await evmScheme.verify(paymentSignature, paymentConfig);
+    if (isValid) {
+      res.setHeader('PAYMENT-RESPONSE', Buffer.from(JSON.stringify({ success: true })).toString('base64'));
+      return res.json({
+        success: true,
+        message: 'Paid content unlocked on Base Mainnet!',
+      });
+    } else {
+      return res.status(402).json({ error: 'Invalid payment signature' });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'Payment verification failed', details: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 8080;
