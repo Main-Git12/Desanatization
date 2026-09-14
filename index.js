@@ -4,10 +4,14 @@ import { paymentMiddleware } from '@x402/express';
 const app = express();
 app.use(express.json());
 
-// Bind the x402 payment enforcement middleware to your route
+// Initialize the x402 payment middleware with the correct route options object
 app.use(
   paymentMiddleware(process.env.WALLET_ADDRESS, {
-    '/api/v1/resource': '$0.01'
+    '/api/v1/resource': {
+      network: 'base',
+      currency: 'usdc',
+      amount: '0.01'
+    }
   })
 );
 
