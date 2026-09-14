@@ -21,7 +21,7 @@ app.get('/api/premium-data',
       scheme: 'exact',
       price: '$0.01',
       network: 'eip155:8453', // Base Sepolia Testnet
-      payTo: process.env.PAY_TO || '0xYourCryptoWalletAddress',
+      payTo: process.env.PAY_TO || '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     },
     description: 'Access to premium data',
   }, server),
