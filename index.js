@@ -14,17 +14,17 @@ resourceServer.register('eip155:*', new ExactEvmScheme());
 
 // 2. Define routes properly with the required 'network' and 'scheme' fields
 const routes = {
-  'GET /api/resource': {
-    accepts: [
-      {
-        scheme: 'exact',
-        network: 'eip155:8453', // Ensure network is explicitly defined here
-        price: '1000000',       // Price in atomic units (e.g., USDC smallest unit)
-        payTo: '0xYourWalletAddressHere',
-      },
-    ],
-    description: 'Protected paid endpoint',
-  },
+  'GET /api/resource': {
+    accepts: [
+      {
+        scheme: 'exact',
+        network: 'eip155:8453', // Ensure network is explicitly defined here
+        price: '1000000',       // Price in atomic units (e.g., USDC smallest unit)
+        payTo: '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
+      },
+    ],
+    description: 'Protected paid endpoint',
+  },
 };
 
 // 3. Bind to Express
@@ -32,9 +32,9 @@ const httpServer = new x402HTTPResourceServer(resourceServer, routes);
 app.use(paymentMiddlewareFromHTTPServer(httpServer));
 
 app.get('/api/resource', (req, res) => {
-  res.json({ success: true, data: 'Protected content accessed successfully!' });
+  res.json({ success: true, data: 'Protected content accessed successfully!' });
 });
 
 app.listen(3000, () => {
-  console.log('x402 payment server running on port 3000');
+  console.log('x402 payment server running on port 3000');
 });
