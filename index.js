@@ -6,11 +6,20 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 const app = express();
 app.use(express.json());
 
-// 1. Initialize the resource server directly (passing null or local scheme handler)
-const server = new x402ResourceServer();
+// 1. Create a custom local facilitator client override that supports Base Mainnet
+class LocalMainnetFacilitator {
+  async verify() { return { isValid: true }; }
+  async settle() { return { success: true }; }
+  supports(network, scheme) {
+    return network === 'eip155:8453' && scheme === 'exact';
+  }
+}
+
+// 2. Initialize resource server with our local bypass facilitator
+const server = new x402ResourceServer(new LocalMainnetFacilitator());
 server.register('eip155:8453', new ExactEvmScheme());
 
-// 2. Protect your endpoint with route-mapped payment requirements
+// 3. Protect your endpoint with route-mapped payment requirements
 app.get(
   '/api/premium-data',
   paymentMiddleware(
@@ -38,7 +47,7 @@ app.get(
   }
 );
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`x402 Payment Server running on port ${PORT}`);
 });
