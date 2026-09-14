@@ -6,8 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "NODE_ENV=development node index.js",
+    "test": "node --test test/**/*.test.js",
+    "test:watch": "node --test test/**/*.test.js --watch",
     "lint": "eslint .",
-    "test": "node --test"
+    "lint:fix": "eslint . --fix"
   },
   "dependencies": {
     "@x402/core": "^2.25.0",
