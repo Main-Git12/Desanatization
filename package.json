@@ -7,7 +7,9 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@x402/express": "^latest",
+    "@x402/core": "^2.25.0",
+    "@x402/evm": "^2.25.0",
+    "@x402/express": "^2.25.0",
     "express": "^4.19.2"
   }
 }
