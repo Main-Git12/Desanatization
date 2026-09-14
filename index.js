@@ -15,12 +15,14 @@ const createPaymentRequiredHeader = (config) => {
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 };
 
+// Properly structured payment requirements for @x402/fetch v2 client
 const paymentConfig = {
   accepts: [
     {
       scheme: 'exact',
       price: '$0.01',
       network: 'eip155:8453',
+      amount: '10000', // Explicit atomic unit string for 0.01 USDC (6 decimals)
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
       payTo: process.env.WALLET_ADDRESS || '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
     },
@@ -32,11 +34,9 @@ const paymentConfig = {
 };
 
 app.get('/api/premium-data', async (req, res) => {
-  // Check for the v2 client payment signature header
   const paymentSignature = req.headers['payment-signature'] || req.headers['x-402-payment'] || req.headers['authorization'];
 
   if (!paymentSignature) {
-    // Set the v2 PAYMENT-REQUIRED base64 header that @x402/fetch requires
     const base64Requirements = createPaymentRequiredHeader(paymentConfig);
     res.setHeader('PAYMENT-REQUIRED', base64Requirements);
     return res.status(402).json({
