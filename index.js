@@ -22,9 +22,9 @@ const paymentConfig = {
       scheme: 'exact',
       network: 'eip155:8453',
       amount: '10000', // 0.01 USDC (6 decimals)
+      value: '10000',  // Provided alongside amount to prevent NaN BigInt parsing errors on client
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base Mainnet
       payTo: RECEIVING_WALLET,
-      // Nested under 'extra' so the client's ExactEvmScheme validator reads them correctly
       extra: {
         name: 'USD Coin',
         version: '2',
