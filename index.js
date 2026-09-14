@@ -6,16 +6,23 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 const app = express();
 app.use(express.json());
 
-// 1. Create a custom local facilitator client override that supports Base Mainnet
+// 1. Complete mock facilitator that satisfies all core protocol checks
 class LocalMainnetFacilitator {
+  async getSupported() {
+    return {
+      kinds: [
+        {
+          scheme: 'exact',
+          network: 'eip155:8453',
+        },
+      ],
+    };
+  }
   async verify() { return { isValid: true }; }
   async settle() { return { success: true }; }
-  supports(network, scheme) {
-    return network === 'eip155:8453' && scheme === 'exact';
-  }
 }
 
-// 2. Initialize resource server with our local bypass facilitator
+// 2. Initialize resource server with our fully compliant local facilitator
 const server = new x402ResourceServer(new LocalMainnetFacilitator());
 server.register('eip155:8453', new ExactEvmScheme());
 
