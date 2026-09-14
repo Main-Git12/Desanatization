@@ -4,29 +4,27 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 const app = express();
 app.use(express.json());
 
-// Initialize the exact EVM scheme handler directly
 const evmScheme = new ExactEvmScheme();
 
-// Custom lightweight middleware that validates the payment header locally
-const localPaymentMiddleware = (config) => {
+// Middleware that matches the protocol's expected 402 challenge structure
+const x402ChallengeMiddleware = (config) => {
   return async (req, res, next) => {
     const paymentHeader = req.headers['x-402-payment'] || req.headers['authorization'];
     
     if (!paymentHeader) {
-      // Return 402 Payment Required with the structured requirements for the client
+      // Return the official x402 protocol specification payload for 402
       return res.status(402).json({
-        error: 'Payment Required',
+        x402Version: 1,
         accepts: config.accepts,
       });
     }
 
     try {
-      // Verify payment details locally on-chain/via scheme
       const isValid = await evmScheme.verify(paymentHeader, config);
       if (isValid) {
         return next();
       } else {
-        return res.status(402).json({ error: 'Invalid payment signature or amount' });
+        return res.status(402).json({ error: 'Invalid payment signature' });
       }
     } catch (err) {
       return res.status(500).json({ error: 'Payment verification failed', details: err.message });
@@ -34,7 +32,7 @@ const localPaymentMiddleware = (config) => {
   };
 };
 
-// Define payment configuration for Base Mainnet
+// Base Mainnet configuration matching client requirements
 const paymentConfig = {
   accepts: [
     {
@@ -51,8 +49,7 @@ const paymentConfig = {
   network: 'eip155:8453',
 };
 
-// Protect the endpoint using our direct local validator
-app.get('/api/premium-data', localPaymentMiddleware(paymentConfig), (req, res) => {
+app.get('/api/premium-data', x402ChallengeMiddleware(paymentConfig), (req, res) => {
   res.json({
     success: true,
     message: 'Paid content unlocked on Base Mainnet!',
