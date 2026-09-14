@@ -1,32 +1,16 @@
 import express from 'express';
 import { paymentMiddleware } from '@x402/express';
-import { x402ResourceServer } from '@x402/core/server';
+import { ResourceServer } from '@x402/core/server';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
 app.use(express.json());
 
-// 1. Complete mock facilitator that satisfies all core protocol checks
-class LocalMainnetFacilitator {
-  async getSupported() {
-    return {
-      kinds: [
-        {
-          scheme: 'exact',
-          network: 'eip155:8453',
-        },
-      ],
-    };
-  }
-  async verify() { return { isValid: true }; }
-  async settle() { return { success: true }; }
-}
-
-// 2. Initialize resource server with our fully compliant local facilitator
-const server = new x402ResourceServer(new LocalMainnetFacilitator());
+// 1. Initialize core ResourceServer directly without HTTP facilitator validation wrappers
+const server = new ResourceServer();
 server.register('eip155:8453', new ExactEvmScheme());
 
-// 3. Protect your endpoint with route-mapped payment requirements
+// 2. Protect your endpoint with route-mapped payment requirements
 app.get(
   '/api/premium-data',
   paymentMiddleware(
