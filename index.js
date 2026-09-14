@@ -1,51 +1,40 @@
 import express from 'express';
-import { paymentMiddleware } from '@x402/express';
+import { x402HTTPResourceServer, x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
+import { paymentMiddlewareFromHTTPServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
-app.use(express.json());
 
-app.use(
-  paymentMiddleware(
-    process.env.WALLET_ADDRESS, // Use a valid environment variable identifier here
-    {
-      'POST /api/v1/resource': {
-        accepts: [
-          {
-            scheme: 'exact',
-            price: '$0.01',
-            network: 'eip155:8453',
-            currency: 'usdc'
-          }
-        ]
-      }
-    },
-    {
-      url: process.env.FACILITATOR_URL
-    }
-  )
-);
+// 1. Initialize the facilitator and resource server
+const facilitatorClient = new HTTPFacilitatorClient({ url: 'https://facilitator.x402.org' });
+const resourceServer = new x402ResourceServer(facilitatorClient);
 
-app.post('/api/v1/resource', (req, res) => {
-  const { service_name, endpoint_url, protocol, network, currency } = req.body;
+// Register your payment scheme (e.g., EVM network family)
+resourceServer.register('eip155:*', new ExactEvmScheme());
 
-  if (!service_name || !endpoint_url) {
-    return res.status(400).json({
-      success: false,
-      message: "Missing required payload fields."
-    });
-  }
+// 2. Define routes properly with the required 'network' and 'scheme' fields
+const routes = {
+  'GET /api/resource': {
+    accepts: [
+      {
+        scheme: 'exact',
+        network: 'eip155:8453', // Ensure network is explicitly defined here
+        price: '1000000',       // Price in atomic units (e.g., USDC smallest unit)
+        payTo: '0xYourWalletAddressHere',
+      },
+    ],
+    description: 'Protected paid endpoint',
+  },
+};
 
-  return res.status(200).json({
-    success: true,
-    message: "Payment verified successfully on Base Mainnet.",
-    resource_id: `res_${Date.now()}`,
-    payment_required: false,
-    payment_network: network || "eip155:8453",
-    payment_currency: currency || "usdc"
-  });
+// 3. Bind to Express
+const httpServer = new x402HTTPResourceServer(resourceServer, routes);
+app.use(paymentMiddlewareFromHTTPServer(httpServer));
+
+app.get('/api/resource', (req, res) => {
+  res.json({ success: true, data: 'Protected content accessed successfully!' });
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
+app.listen(3000, () => {
+  console.log('x402 payment server running on port 3000');
 });
