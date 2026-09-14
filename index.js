@@ -1,16 +1,23 @@
 import express from 'express';
 import { paymentMiddleware } from '@x402/express';
-import { ResourceServer } from '@x402/core/server';
+import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 
 const app = express();
 app.use(express.json());
 
-// 1. Initialize core ResourceServer directly without HTTP facilitator validation wrappers
-const server = new ResourceServer();
+// 1. Initialize the facilitator client
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: 'https://x402.org/facilitator',
+});
+
+// 2. Initialize the resource server
+const server = new x402ResourceServer(facilitatorClient);
+
+// 3. Register the exact EVM scheme for Base Mainnet
 server.register('eip155:8453', new ExactEvmScheme());
 
-// 2. Protect your endpoint with route-mapped payment requirements
+// 4. Protect your endpoint with route-mapped payment requirements
 app.get(
   '/api/premium-data',
   paymentMiddleware(
