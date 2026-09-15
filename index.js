@@ -7,23 +7,18 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURATION: PERMANENT WALLET
+// CONFIGURATION: AUTO-ALIGNED WALLET
 // ==========================================
-// Put your real 64-character hex private key here (with or without '0x')
 const PERMANENT_PRIVATE_KEY = process.env.SERVER_PRIVATE_KEY || '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d'; 
-const RECEIVING_WALLET = '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d';
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
-// In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Clean and sanitize private key string
 let rawKey = String(PERMANENT_PRIVATE_KEY || '').trim().replace(/^["']|["']$/g, '');
 if (!rawKey.startsWith('0x')) {
   rawKey = '0x' + rawKey;
 }
 
-// Fallback if placeholder is detected
 let serverPrivateKey;
 if (rawKey.includes('YOUR_EXACT') || rawKey.length !== 66) {
   console.warn('WARNING: Invalid or placeholder private key detected. Generating a temporary test key.');
@@ -32,8 +27,11 @@ if (rawKey.includes('YOUR_EXACT') || rawKey.length !== 66) {
   serverPrivateKey = rawKey;
 }
 
+// Automatically derive the account from the private key
 const serverAccount = privateKeyToAccount(serverPrivateKey);
-console.log(`Server wallet executor & payee address: ${serverAccount.address}`);
+const RECEIVING_WALLET = serverAccount.address; // Payee is ALWAYS the server executor!
+
+console.log(`Server wallet executor & payee address locked to: ${RECEIVING_WALLET}`);
 
 const serverClient = createWalletClient({
   account: serverAccount,
@@ -66,7 +64,7 @@ const paymentConfig = {
     {
       scheme: 'exact',
       network: 'eip155:8453',
-      amount: '10000', // 0.01 USDC (6 decimals)
+      amount: '10000', // 0.01 USDC
       asset: USDC_ADDRESS,
       payTo: RECEIVING_WALLET,
       extra: {
@@ -103,12 +101,10 @@ app.get('/api/premium-data', async (req, res) => {
     const decoded = JSON.parse(Buffer.from(authHeader, 'base64').toString('utf8'));
     const { signature, authorization } = decoded.payload;
 
-    // 1. Replay Protection Check
     if (usedNonces.has(authorization.nonce)) {
       return res.status(400).json({ error: 'Nonce already used (replay attack prevented)' });
     }
 
-    // 2. Cryptographic Signature Verification
     const isValid = await verifyTypedData({
       address: authorization.from,
       domain: {
@@ -147,7 +143,6 @@ app.get('/api/premium-data', async (req, res) => {
       return res.status(402).json({ error: 'Invalid payment details or signature' });
     }
 
-    // 3. Execute On-Chain Settlement
     console.log(`Executing on-chain settlement for nonce ${authorization.nonce}...`);
     const hash = await serverClient.writeContract({
       address: USDC_ADDRESS,
@@ -169,7 +164,6 @@ app.get('/api/premium-data', async (req, res) => {
     await serverClient.waitForTransactionReceipt({ hash });
     console.log(`Settlement successful! Tx Hash: ${hash}`);
 
-    // Mark nonce as used
     usedNonces.add(authorization.nonce);
 
     res.setHeader('PAYMENT-RESPONSE', Buffer.from(JSON.stringify({ success: true, txHash: hash })).toString('base64'));
