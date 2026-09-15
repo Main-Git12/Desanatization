@@ -7,6 +7,7 @@
 
 import express from 'express';
 import { describeConfig } from './config.js';
+import { createGrowthEngine } from './growth.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import {
   getInsights,
@@ -67,6 +68,16 @@ function requireMetricsToken(config) {
  */
 export function createApp({ config, logger, x402 }) {
   const app = express();
+
+  // Outbound growth engine (opt-in): discovers and pitches peer agents, then
+  // learns which channels work. Exposed read-only at /api/growth.
+  const growthEngine = createGrowthEngine({
+    config,
+    logger,
+    selfBaseUrl: config.growth?.publicUrl ?? `http://localhost:${config.port}`,
+    intervalMs: config.growth?.intervalMs,
+    maxPerCycle: config.growth?.maxPerCycle,
+  });
 
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
@@ -129,6 +140,7 @@ export function createApp({ config, logger, x402 }) {
         openapi: 'GET /openapi.json',
         skill: 'GET /skill.md',
         insights: 'GET /api/insights',
+        growth: 'GET /api/growth',
       },
       endpoints: {
         discovery: 'GET /',
@@ -178,6 +190,34 @@ export function createApp({ config, logger, x402 }) {
   // is how pricing experiments get scored, so it stays private by default.
   app.get('/api/insights', requireMetricsToken(config), (req, res) => {
     res.json({ ...getInsights(), paywallReady: x402.isReady(), timestamp: new Date().toISOString() });
+  });
+
+  // Outbound engine learning report: which peers were pitched, which channels
+  // scored highest. Same guard — it reveals our prospect list.
+  app.get('/api/growth', requireMetricsToken(config), (req, res) => {
+    res.json({ ...growthEngine.getStats(), paywallReady: x402.isReady(), timestamp: new Date().toISOString() });
+  });
+
+  // Inbound outreach: peers pitch us back at the same surface our engine
+  // pitches them. Machine-readable, rate-limited by the global limiter, and
+  // never trusted for anything beyond being recorded.
+  app.post('/api/outreach', (req, res) => {
+    const pitch = req.body;
+    if (!pitch || typeof pitch !== 'object' || pitch.type !== 'x402-service-pitch' || !pitch.from) {
+      return res.status(400).json({
+        error: 'Expected a pitch document: {"type":"x402-service-pitch","from":"https://…",…}',
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    growthEngine.recordInbound(pitch, req.ip);
+    trackFunnel('inboundPitch');
+    logger.info(`Inbound pitch from ${String(pitch.from).slice(0, 120)}`);
+    res.status(202).json({
+      accepted: true,
+      note: 'Pitch recorded. Our storefront: see llms.txt and openapi.json.',
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // --- Agent-readable storefront --------------------------------------------
@@ -367,9 +407,11 @@ export function createApp({ config, logger, x402 }) {
 
   return {
     app,
+    growthEngine,
     dispose: () => {
       limiter.dispose?.();
       x402.stopRetries?.();
+      growthEngine.stop?.();
     },
   };
 }

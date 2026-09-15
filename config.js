@@ -335,6 +335,16 @@ export function loadConfig(env = process.env) {
       windowMs: readInt(env.RATE_LIMIT_WINDOW_MS, 'RATE_LIMIT_WINDOW_MS', { min: 1000 }, problems, 60_000),
       maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 'RATE_LIMIT_MAX_REQUESTS', { min: 1 }, problems, 60),
     },
+
+    // Outbound growth engine: opt-in, capped, self-learning.
+    growth: {
+      enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, false),
+      targets: env.GROWTH_TARGETS,
+      discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
+      publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
+      intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
+      maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
+    },
   };
 
   if (problems.length > 0) {

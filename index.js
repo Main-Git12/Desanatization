@@ -73,12 +73,15 @@ async function main() {
   }
 
   const x402 = createX402(config, logger);
-  const { app, dispose } = createApp({ config, logger, x402 });
+  const { app, dispose, growthEngine } = createApp({ config, logger, x402 });
 
   const server = app.listen(config.port, config.host, () => {
     logger.info(`HTTP server listening on ${config.host}:${config.port}`);
     logger.info(`Paid endpoint: GET ${config.resource.path} for ${JSON.stringify(config.price)} on ${config.network}`);
   });
+
+  // Outbound growth loop: disabled unless GROWTH_ENABLED=true.
+  growthEngine.start();
 
   // Railway terminates TLS and forwards; keep sockets from idling forever.
   server.keepAliveTimeout = 65_000;
@@ -99,6 +102,7 @@ async function main() {
     logger.info(`Shutting down (${reason})…`);
 
     x402.stopRetries();
+    growthEngine.stop?.();
     dispose();
 
     const forceExit = setTimeout(() => {

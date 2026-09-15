@@ -204,3 +204,186 @@ describe('referrals + receipts', () => {
     }
   });
 });
+
+describe('outbound growth engine', () => {
+  /** Minimal logger stub so engine logs stay out of test output. */
+  const quietLogger = { info: () => {}, warn: () => {}, error: () => {} };
+
+  /**
+   * Start a fake peer on an ephemeral port.
+   *
+   * @param {object} behaviour - status/bodies per path
+   * @returns {Promise<{ base: string, close: () => Promise<void> }>}
+   */
+  async function startFakePeer({ outreachStatus = 200 } = {}) {
+    const http = await import('node:http');
+    const peer = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/api/outreach') {
+        res.statusCode = outreachStatus;
+        res.setHeader('Content-Type', 'application/json');
+        res.end('{"accepted":true}');
+      } else if (req.url === '/') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/html');
+        res.end('<html>x402 peer homepage</html>');
+      } else {
+        res.statusCode = 404;
+        res.end();
+      }
+    });
+    await new Promise((resolve) => peer.listen(0, '127.0.0.1', resolve));
+    const { port } = peer.address();
+    return {
+      base: `http://127.0.0.1:${port}`,
+      close: () => new Promise((resolve) => peer.close(resolve)),
+    };
+  }
+
+  test('parseTargets keeps only valid http(s) URLs and normalises them', async () => {
+    const { parseTargets } = await import('../growth.js');
+    assert.deepEqual(parseTargets(undefined), []);
+    assert.deepEqual(parseTargets('not json'), []);
+    assert.deepEqual(parseTargets('{"no":"array"}'), []);
+    const targets = parseTargets('[{"url":"https://a.example/","kind":"registry"},{"url":"ftp://bad"}]');
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].url, 'https://a.example');
+    assert.equal(targets[0].kind, 'registry');
+    assert.equal(targets[0].score, 1);
+  });
+
+  test('mergeDiscovered dedupes by URL and keeps learned scores', async () => {
+    const { mergeDiscovered } = await import('../growth.js');
+    const existing = [{ url: 'https://a.example', kind: 'manual', score: 3.5, pitches: 2, responses: 1 }];
+    const merged = mergeDiscovered(existing, ['https://a.example', 'https://b.example', 'not-a-url', { url: 'https://c.example/', kind: 'feed' }]);
+    assert.equal(merged.length, 3);
+    assert.equal(merged.find((t) => t.url === 'https://a.example').score, 3.5);
+    assert.equal(merged.find((t) => t.url === 'https://b.example').kind, 'discovered');
+    assert.equal(merged.find((t) => t.url === 'https://c.example').kind, 'feed');
+  });
+
+  test('buildPitch advertises storefront without leaking secrets', async () => {
+    const { buildPitch } = await import('../growth.js');
+    const pitch = buildPitch(
+      { resource: { serviceName: 'Desanatization', path: '/api/resource' }, price: { amount: '$0.001' }, network: 'eip155:84532' },
+      'https://self.example',
+    );
+    assert.equal(pitch.from, 'https://self.example');
+    assert.match(pitch.service.endpoint, /\/api\/resource$/);
+    assert.match(pitch.service.docs, /\/llms\.txt$/);
+    assert.ok(!JSON.stringify(pitch).includes('PAY_TO'));
+  });
+
+  test('a full cycle probes the peer, pitches it, and learns (score rises)', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const peer = await startFakePeer({ outreachStatus: 200 });
+    try {
+      const engine = createGrowthEngine({
+        config: { growth: { targets: JSON.stringify([{ url: peer.base, kind: 'test' }]) } },
+        logger: quietLogger,
+        selfBaseUrl: 'https://self.example',
+      });
+      const summary = await engine.runCycle();
+      assert.equal(summary.pitched, 1);
+      assert.equal(summary.pool, 1);
+
+      const stats = engine.getStats();
+      assert.equal(stats.cycles, 1);
+      assert.equal(stats.totalPitches, 1);
+      assert.equal(stats.targets[0].lastResult, 'pitched');
+      assert.ok(stats.targets[0].score > 1, 'score should rise after a successful pitch');
+      assert.equal(stats.targets[0].pitches, 1);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  test('an unreachable peer decays instead of being retried first', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const engine = createGrowthEngine({
+      config: { growth: { targets: JSON.stringify([{ url: 'http://127.0.0.1:1', kind: 'dead' }]) } },
+      logger: quietLogger,
+      selfBaseUrl: 'https://self.example',
+    });
+    const summary = await engine.runCycle();
+    assert.equal(summary.pitched, 0);
+    const stats = engine.getStats();
+    assert.match(stats.targets[0].lastResult, /unreachable/);
+    assert.ok(stats.targets[0].score < 1, 'score should decay for unreachable peers');
+  });
+
+  test('the engine stays idle until started, and start() respects GROWTH_ENABLED', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const disabled = createGrowthEngine({
+      config: { growth: { enabled: false } },
+      logger: quietLogger,
+      selfBaseUrl: 'https://self.example',
+    });
+    disabled.start(); // must be a no-op, not throw
+    assert.equal(disabled.getStats().enabled, false);
+  });
+
+  test('/api/growth reports engine state and honours the metrics token', async () => {
+    resetMetrics();
+    const server = await startTestServer({ env: { METRICS_TOKEN: 'growth-secret' } });
+    try {
+      const denied = await server.fetch('/api/growth');
+      assert.equal(denied.status, 401);
+
+      const response = await server.fetch('/api/growth', {
+        headers: { Authorization: 'Bearer growth-secret' },
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.enabled, false); // opt-in: off by default
+      assert.equal(body.cycles, 0);
+      assert.ok(Array.isArray(body.targets));
+      assert.ok(Array.isArray(body.inbox));
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('closed loop: our engine pitches our own /api/outreach and it lands', async () => {
+    resetMetrics();
+    const server = await startTestServer({ env: { METRICS_TOKEN: 'loop-secret' } });
+    try {
+      const { createGrowthEngine } = await import('../growth.js');
+      const engine = createGrowthEngine({
+        config: { growth: { targets: JSON.stringify([{ url: server.baseUrl, kind: 'self-test' }]) } },
+        logger: quietLogger,
+        selfBaseUrl: server.baseUrl,
+      });
+      const summary = await engine.runCycle();
+      assert.equal(summary.pitched, 1, 'our own outreach surface must accept the pitch');
+
+      const insights = await (await server.fetch('/api/insights', {
+        headers: { Authorization: 'Bearer loop-secret' },
+      })).json();
+      assert.equal(insights.funnel.inboundPitch, 1, 'inbound pitch counted in the funnel');
+
+      const growth = await (await server.fetch('/api/growth', {
+        headers: { Authorization: 'Bearer loop-secret' },
+      })).json();
+      assert.equal(growth.inbox.length, 1);
+      assert.equal(growth.inbox[0].type, 'x402-service-pitch');
+      assert.match(growth.inbox[0].from, /^http/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('POST /api/outreach rejects malformed pitches', async () => {
+    const server = await startTestServer();
+    try {
+      const bad = await server.fetch('/api/outreach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hello: 'world' }),
+      });
+      assert.equal(bad.status, 400);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
