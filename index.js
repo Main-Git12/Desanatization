@@ -8,25 +8,21 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// Initialize the resource server with schemes
+// Define routes with extensions set to an empty object
+const routes = {
+  '/api/resource': {
+    price: config.price,
+    network: config.network,
+    extensions: {},
+  },
+};
+
+// Pass routes directly into constructor options
 const server = new x402HTTPResourceServer({
   schemes: config.schemes,
   paywall: config.paywall,
+  routes: routes,
 });
-
-// Explicit route definition with empty extensions object required by x402 core validation
-const routeConfig = {
-  price: config.price,
-  network: config.network,
-  extensions: {},
-};
-
-const routes = {
-  '/api/resource': routeConfig,
-};
-
-// Register route explicitly with the server instance
-server.register('/api/resource', routeConfig);
 
 app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   res.json({
