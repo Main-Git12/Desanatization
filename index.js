@@ -8,6 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
+// 1. Fully-formed route config with explicit extensions object
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
@@ -19,6 +20,7 @@ const routes = {
   '/api/resource': routeConfig,
 };
 
+// 2. Instantiate server with paywall options populated
 const server = new x402HTTPResourceServer({
   schemes: config.schemes || [],
   paywall: {
