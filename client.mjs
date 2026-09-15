@@ -1,4 +1,3 @@
-cat << 'EOF' > client.mjs
 import { x402Client } from '@x402/core/client';
 import { x402HTTPClient } from '@x402/core/http';
 import { ExactEvmScheme } from '@x402/evm/exact/client';
@@ -22,7 +21,7 @@ async function runClient() {
   const coreClient = x402Client.fromConfig({
     schemes: [
       {
-        network: 'eip155:845',
+        network: 'eip155:8453',
         client: new ExactEvmScheme(account),
       },
     ],
@@ -60,4 +59,3 @@ async function runClient() {
 }
 
 runClient();
-EOF
