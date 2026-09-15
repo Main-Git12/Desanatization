@@ -1,5 +1,6 @@
 import express from 'express';
-import { x402HTTPResourceServer } from '@x402/core/server';
+import { x402ResourceServer } from '@x402/core/server';
+import { x402HTTPResourceServer } from '@x402/core/http';
 import { paymentMiddleware } from '@x402/express';
 import { loadConfig } from './config.js';
 
@@ -8,32 +9,26 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// Define full route config containing required extensions property
-const routeConfig = {
-  price: config.price || '$0.001',
-  network: config.network || 'base-sepolia',
-  payTo: config.payToAddress,
-  extensions: {},
-  description: 'Protected API Resource',
-};
-
-// Define explicit routes including wildcard route to prevent validation undefined lookups
+// 1. Define routes using the HTTP method prefix and 'accepts' block
 const routes = {
-  '/api/resource': routeConfig,
-  '*': routeConfig,
+  'GET /api/resource': {
+    accepts: {
+      scheme: 'exact',
+      price: config.price || '$0.001',
+      network: config.network || 'base-sepolia',
+      payTo: config.payToAddress,
+    },
+    description: 'Protected API Resource',
+    mimeType: 'application/json',
+  },
 };
 
-// Pass routes to x402HTTPResourceServer options
-const server = new x402HTTPResourceServer({
-  schemes: config.schemes || [],
-  paywall: {
-    payTo: config.payToAddress,
-    routes: routes,
-  },
-  routes: routes,
-});
+// 2. Initialize the underlying resource server and the HTTP server wrapper
+const resourceServer = new x402ResourceServer();
+const httpServer = new x402HTTPResourceServer(resourceServer, routes);
 
-app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
+// 3. Attach payment middleware
+app.get('/api/resource', paymentMiddleware(httpServer, routes), (req, res) => {
   res.json({
     status: 'success',
     message: 'Payment verified! Access granted to protected resource.',
