@@ -6,7 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { FREE_TIER_MAX_CHARS, sanitizeText, validateBatchBody, validateSanitizeBody } from '../sanitize.js';
-import { getInsights, resetMetrics } from '../middleware/monitoring.js';
+import { getInsights, resetMetrics, trackPayment } from '../middleware/monitoring.js';
 import { startTestServer } from './support/boot.js';
 
 describe('sanitize engine', () => {
@@ -143,6 +143,62 @@ describe('paid batch endpoint', () => {
       assert.ok(openapi.paths['/api/sanitize/batch']);
       assert.match(await (await server.fetch('/llms.txt')).text(), /batch/);
       assert.match((await (await server.fetch('/')).json()).product.batch, /batch/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('referrals + receipts', () => {
+  test('a valid ?ref= is attributed on the trial', async () => {
+    resetMetrics();
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/api/sanitize/trial?ref=agent-guy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Mail jane@example.com' }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(getInsights().referrals, [{ ref: 'agent-guy', sales: 1 }]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('an invalid ref is ignored, not counted', async () => {
+    resetMetrics();
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/api/sanitize/trial?ref=!!bad-ref', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Mail jane@example.com' }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(getInsights().referrals, []);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('settled receipts are publicly listable', async () => {
+    resetMetrics();
+    trackPayment({
+      amount: '1000',
+      asset: 'USDC',
+      payer: '0xabc0000000000000000000000000000000000001',
+      network: 'eip155:84532',
+      transaction: '0xdeadbeef',
+    });
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/receipts');
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.count, 1);
+      assert.equal(body.receipts[0].transaction, '0xdeadbeef');
+      assert.equal(body.receipts[0].amount, '1000');
     } finally {
       await server.close();
     }

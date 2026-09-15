@@ -11,6 +11,7 @@ import { createCorsMiddleware } from './middleware/cors.js';
 import {
   getInsights,
   getMetrics,
+  getRecentReceipts,
   trackFunnel,
   trackPayment,
   trackPaymentFailure,
@@ -123,6 +124,7 @@ export function createApp({ config, logger, x402 }) {
         sanitize: `POST ${config.resource.path}`,
         freeTrial: `POST /api/sanitize/trial (first ${FREE_TIER_MAX_CHARS} chars, no payment)`,
         batch: 'POST /api/sanitize/batch (up to 10 texts, one settlement)',
+        proof: 'GET /receipts (settled payments, public)',
         docs: 'GET /llms.txt',
         openapi: 'GET /openapi.json',
         skill: 'GET /skill.md',
@@ -194,6 +196,22 @@ export function createApp({ config, logger, x402 }) {
     res.type('text/markdown').send(buildSkillMd(config));
   });
 
+  // Proof of work: settled payments are public on-chain facts. Publishing
+  // them lets agents verify real buyers exist before they integrate.
+  app.get('/receipts', (req, res) => {
+    const receipts = getRecentReceipts();
+    res.json({
+      count: receipts.length,
+      receipts,
+      note: 'On-chain settlement facts (tx, payer, amount). Newest first.',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Referral attribution: ?ref= or X-Referral header, validated but never
+  // trusted for auth — only for counting which agent sent the buyer.
+  const referralOf = (req) => validateRef(req.query.ref ?? req.headers['x-referral']);
+
   // --- Free trial: taste before paying --------------------------------------
   // Same deterministic engine, capped input. Converts window-shoppers into
   // buyers: the 200 response carries the paid upsell inline.
@@ -203,6 +221,7 @@ export function createApp({ config, logger, x402 }) {
       return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
     }
     trackFunnel('freeTrial');
+    trackReferral(referralOf(req));
     const trial = text.slice(0, FREE_TIER_MAX_CHARS);
     const result = sanitizeText(trial);
     res.json({
@@ -277,6 +296,7 @@ export function createApp({ config, logger, x402 }) {
       return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
     }
     trackFunnel('paidCall');
+    trackReferral(referralOf(req));
     logger.debug(`Serving paid sanitize (x402 v${req.x402?.paymentHeaderVersion ?? '?'} client)`);
     res.json({
       success: true,
@@ -301,6 +321,7 @@ export function createApp({ config, logger, x402 }) {
       return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
     }
     trackFunnel('batchCall');
+    trackReferral(referralOf(req));
     const results = items.map((item) => sanitizeCached(item));
     const totalRedactions = results.reduce((totals, result) => {
       for (const [kind, count] of Object.entries(result.redactions)) {
@@ -386,6 +407,7 @@ private keys / API keys, Bearer tokens, URL tokens (?token=…).
 - POST /api/sanitize/trial — free trial (no payment)
 - POST ${config.resource.path} — paid sanitize (x402)
 - POST /api/sanitize/batch — paid batch: up to 10 texts, one settlement
+- GET /receipts — settled payment receipts (public on-chain facts)
 - GET /health — liveness · GET /ready — can-take-money readiness
 `;
 }
@@ -492,6 +514,40 @@ function buildOpenApi(config, req) {
               },
             },
             402: { description: 'Payment required — read PAYMENT-REQUIRED header' },
+          },
+        },
+      },
+      '/receipts': {
+        get: {
+          summary: 'Recent settled payments (public on-chain facts)',
+          responses: {
+            200: {
+              description: 'Newest-first settlement receipts',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      count: { type: 'integer' },
+                      receipts: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            transaction: { type: 'string' },
+                            payer: { type: 'string' },
+                            amount: { type: 'string' },
+                            asset: { type: 'string' },
+                            network: { type: 'string' },
+                            at: { type: 'string' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },

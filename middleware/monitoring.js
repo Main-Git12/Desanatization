@@ -191,6 +191,18 @@ export function getInsights() {
     revenueAtomicByAsset: { ...metrics.revenueAtomicByAsset },
   };
 }
+
+/**
+ * Public settlement receipts: tx, payer, amount — verifiable on-chain facts,
+ * safe to publish. Agents check these before integrating.
+ *
+ * @param {number} [limit=20] - Maximum receipts to return
+ * @returns {Array<object>} Recent receipts, newest first
+ */
+export function getRecentReceipts(limit = 20) {
+  return metrics.receipts.slice(0, limit);
+}
+
 /**
  * Snapshot current metrics.
  *
