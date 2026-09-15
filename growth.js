@@ -405,6 +405,9 @@ export function createGrowthEngine({
     getPricingAdvice,
     start: () => {
       if (!config.growth?.enabled) return;
+      // First cycle fires immediately so the engine is working from boot,
+      // then continues on the interval.
+      runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
       timer = setInterval(() => {
         runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
       }, intervalMs);

@@ -640,6 +640,41 @@ function buildOpenApi(config, req) {
           },
         },
       },
+      '/api/growth': {
+        get: {
+          summary: 'Adaptive growth engine state (token-guarded)',
+          responses: { 200: { description: 'Cycles, targets with learned scores, market radar, pricing advice' } },
+        },
+      },
+      '/api/agent/task': {
+        post: {
+          summary: 'Send the autonomous task agent a goal (token-guarded)',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { goal: { type: 'string' }, maxSteps: { type: 'integer' } },
+                  required: ['goal'],
+                },
+              },
+            },
+          },
+          responses: { 200: { description: 'Outcome with full auditable trace' }, 400: { description: 'Invalid goal' } },
+        },
+      },
+      '/api/agent/skills': {
+        get: {
+          summary: 'The learned skill library (token-guarded)',
+          responses: { 200: { description: 'Skills, replays, repairs, degradations' } },
+        },
+      },
+      '/api/outreach': {
+        post: {
+          summary: 'Peer services pitch us here (rate-limited, capped inbox)',
+          responses: { 202: { description: 'Pitch accepted' }, 400: { description: 'Malformed pitch' } },
+        },
+      },
     },
   };
 }
