@@ -8,21 +8,25 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Define routes with explicit empty extensions object
-const routes = {
-  '/api/resource': {
-    price: config.price,
-    network: config.network,
-    extensions: {}, // Required by x402 route validation
-  },
-};
-
-// 2. Instantiate server passing routes into constructor configuration
+// Initialize the resource server with schemes
 const server = new x402HTTPResourceServer({
   schemes: config.schemes,
   paywall: config.paywall,
-  routes: routes,
 });
+
+// Explicit route definition with empty extensions object required by x402 core validation
+const routeConfig = {
+  price: config.price,
+  network: config.network,
+  extensions: {},
+};
+
+const routes = {
+  '/api/resource': routeConfig,
+};
+
+// Register route explicitly with the server instance
+server.register('/api/resource', routeConfig);
 
 app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   res.json({
@@ -32,7 +36,6 @@ app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   });
 });
 
-// 3. Bind explicitly to process.env.PORT and 0.0.0.0 for Railway
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
