@@ -1,40 +1,33 @@
 import express from 'express';
 import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
 app.use(express.json());
 
-const RECEIVING_WALLET = '0x3e2f6dcA5cFC944324A4F6C9593Ec7E513c599c2';
+// ==========================================
+// CONFIGURATION: LOCKED PERMANENT WALLET
+// ==========================================
+// Replace the string below with your exact funded private key (or leave 
+// process.env.SERVER_PRIVATE_KEY if you want to keep using Railway's variables).
+const PERMANENT_PRIVATE_KEY = process.env.SERVER_PRIVATE_KEY || '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d';
+
+// Hardcoded to match your active funded wallet address so caller == payee
+const RECEIVING_WALLET = '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d';
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
 // In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Safely parse and clean private key from environment variables
-let rawKey = process.env.SERVER_PRIVATE_KEY;
-if (rawKey) {
-  rawKey = rawKey.trim().replace(/^["']|["']$/g, ''); // Strip accidental quotes or spaces
-  if (!rawKey.startsWith('0x')) {
-    rawKey = '0x' + rawKey;
-  }
+// Clean and validate private key format
+let rawKey = PERMANENT_PRIVATE_KEY.trim().replace(/^["']|["']$/g, '');
+if (!rawKey.startsWith('0x')) {
+  rawKey = '0x' + rawKey;
 }
 
-let serverPrivateKey;
-try {
-  if (rawKey && rawKey.length === 66) {
-    serverPrivateKey = rawKey;
-  } else {
-    throw new Error('Invalid length or format');
-  }
-} catch (e) {
-  console.warn('WARNING: SERVER_PRIVATE_KEY is missing or invalid. Falling back to a generated key for testing.');
-  serverPrivateKey = generatePrivateKey();
-}
-
-const serverAccount = privateKeyToAccount(serverPrivateKey);
-console.log(`Server wallet executor address: ${serverAccount.address}`);
+const serverAccount = privateKeyToAccount(rawKey);
+console.log(`Server wallet executor & payee address: ${serverAccount.address}`);
 
 const serverClient = createWalletClient({
   account: serverAccount,
