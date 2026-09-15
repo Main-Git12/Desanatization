@@ -1,33 +1,39 @@
 import express from 'express';
-import { x402ResourceServer } from '@x402/core/server';
-import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { x402HTTPResourceServer } from '@x402/core/server';
+import { paymentMiddleware } from '@x402/express';
+import { loadConfig } from './config.js';
+
+const config = loadConfig();
 
 const app = express();
 app.use(express.json());
 
-const server = new x402ResourceServer();
-server.register('eip155:8453', new ExactEvmScheme());
-
+// 1. Define routes with explicit empty extensions object
 const routes = {
-  'GET /api/resource': {
-    accepts: [
-      {
-        scheme: 'exact',
-        network: 'eip155:8453',
-        price: '1000000',
-        asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-        payTo: '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
-      },
-    ],
-    description: 'Protected paid endpoint',
+  '/api/resource': {
+    price: config.price,
+    network: config.network,
+    extensions: {}, // Required by x402 route validation
   },
 };
 
-app.get('/api/resource', server.middleware(routes), (req, res) => {
-  res.json({ success: true, message: 'Welcome to the live mainnet resource!' });
+// 2. Instantiate server passing routes into constructor configuration
+const server = new x402HTTPResourceServer({
+  schemes: config.schemes,
+  paywall: config.paywall,
+  routes: routes,
 });
 
+app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
+  res.json({
+    status: 'success',
+    message: 'Payment verified! Access granted to protected resource.',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// 3. Bind explicitly to process.env.PORT and 0.0.0.0 for Railway
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on port ${PORT}`);
 });
