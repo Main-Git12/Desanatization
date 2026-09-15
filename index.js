@@ -1,6 +1,5 @@
 import express from 'express';
 import { x402ResourceServer } from '@x402/core/server';
-import { x402HTTPResourceServer } from '@x402/core/http';
 import { paymentMiddleware } from '@x402/express';
 import { loadConfig } from './config.js';
 
@@ -9,7 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. `accepts` must be an ARRAY of payment option objects
+// 1. Define the correct v2 route structure
 const routes = {
   'GET /api/resource': {
     accepts: [
@@ -18,19 +17,18 @@ const routes = {
         price: config.price || '$0.001',
         network: config.network || 'base-sepolia',
         payTo: config.payToAddress,
-      },
+      }
     ],
     description: 'Protected API Resource',
     mimeType: 'application/json',
-  },
+  }
 };
 
-// 2. Initialize resource server & HTTP server
+// 2. Initialize the base resource server
 const resourceServer = new x402ResourceServer();
-const httpServer = new x402HTTPResourceServer(resourceServer, routes);
 
-// 3. Attach paymentMiddleware with instantiated httpServer
-app.get('/api/resource', paymentMiddleware(httpServer, routes), (req, res) => {
+// 3. Let paymentMiddleware handle the HTTP wrapper natively
+app.get('/api/resource', paymentMiddleware(resourceServer, routes), (req, res) => {
   res.json({
     status: 'success',
     message: 'Payment verified! Access granted to protected resource.',
