@@ -8,7 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// Complete route config definition
+// Define full route config containing required extensions property
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
@@ -17,13 +17,13 @@ const routeConfig = {
   description: 'Protected API Resource',
 };
 
-// Define both your exact endpoint AND the wildcard fallback route
+// Define explicit routes including wildcard route to prevent validation undefined lookups
 const routes = {
   '/api/resource': routeConfig,
   '*': routeConfig,
 };
 
-// Instantiate server with catch-all covered
+// Pass routes to x402HTTPResourceServer options
 const server = new x402HTTPResourceServer({
   schemes: config.schemes || [],
   paywall: {
