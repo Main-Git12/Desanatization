@@ -13,6 +13,7 @@
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from '@x402/core/server';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { paymentMiddlewareFromHTTPServer } from '@x402/express';
+import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
 
 /**
  * Build a facilitator HTTP client, adding auth headers when configured.
@@ -83,48 +84,103 @@ export function buildRoutes(config, scheme) {
     return resolvedPrice;
   };
 
-  return {
-    [`GET ${config.resource.path}`]: {
-      accepts,
-      description: config.resource.description,
-      mimeType: config.resource.mimeType,
-      serviceName: config.resource.serviceName,
-
-      unpaidResponseBody: async () => {
-        const resolved = await resolvePrice();
-        return {
-          contentType: 'application/json',
-          body: {
-            error: 'Payment required',
-            x402Version: 2,
-            protocol: 'x402',
-            requirementsHeader: 'PAYMENT-REQUIRED',
-            note:
-              'Machine-readable requirements are in the PAYMENT-REQUIRED response header; ' +
-              'this body mirrors them for convenience.',
-            accepts: [
-              {
-                scheme: config.scheme,
-                network: config.network,
-                payTo: config.payToAddress,
-                maxTimeoutSeconds: config.maxTimeoutSeconds,
-                price: config.price,
-                amount: resolved?.amount,
-                asset: resolved?.asset,
-                extra: resolved?.extra,
+  const discoverable = (method) =>
+    declareDiscoveryExtension(
+      method === 'POST'
+        ? {
+            discoverable: true,
+            method: 'POST',
+            bodyType: 'json',
+            description:
+              'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
+              'POST { "text": "..." } for full jobs (paid).',
+            input: { text: 'Contact me at jane@example.com' },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                text: { type: 'string', description: 'Text to sanitize' },
               },
-            ],
-            resource: {
-              description: config.resource.description,
-              mimeType: config.resource.mimeType,
+              required: ['text'],
             },
-            hint:
-              'Sign a payment for one of the entries in "accepts" and retry the request with ' +
-              'it in the PAYMENT-SIGNATURE header (the legacy X-PAYMENT header is also accepted).',
+            outputSchema: {
+              type: 'object',
+              properties: {
+                clean: { type: 'string', description: 'Sanitized text' },
+                redactions: { type: 'object', description: 'Counts per redaction class' },
+              },
+            },
+          }
+        : {
+            discoverable: true,
+            method: 'GET',
+            description:
+              'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
+              'GET with ?text= for short trials.',
+            input: { text: 'Contact me at jane@example.com' },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                text: { type: 'string', description: 'Text to sanitize' },
+              },
+            },
+            outputSchema: {
+              type: 'object',
+              properties: {
+                clean: { type: 'string', description: 'Sanitized text' },
+                redactions: { type: 'object', description: 'Counts per redaction class' },
+              },
+            },
           },
-        };
-      },
+    );
+
+  const makeRoute = (method) => ({
+    accepts,
+    description: config.resource.description,
+    mimeType: config.resource.mimeType,
+    serviceName: config.resource.serviceName,
+    // Bazaar discovery: this is what puts the endpoint in the x402
+    // catalog so agents can find it without a pre-baked integration.
+    extensions: discoverable(method),
+
+    unpaidResponseBody: async () => {
+      const resolved = await resolvePrice();
+      return {
+        contentType: 'application/json',
+        body: {
+          error: 'Payment required',
+          x402Version: 2,
+          protocol: 'x402',
+          requirementsHeader: 'PAYMENT-REQUIRED',
+          note:
+            'Machine-readable requirements are in the PAYMENT-REQUIRED response header; ' +
+            'this body mirrors them for convenience.',
+          accepts: [
+            {
+              scheme: config.scheme,
+              network: config.network,
+              payTo: config.payToAddress,
+              maxTimeoutSeconds: config.maxTimeoutSeconds,
+              price: config.price,
+              amount: resolved?.amount,
+              asset: resolved?.asset,
+              extra: resolved?.extra,
+            },
+          ],
+          resource: {
+            description: config.resource.description,
+            mimeType: config.resource.mimeType,
+          },
+          hint:
+            'Sign a payment for one of the entries in "accepts" and retry the request with ' +
+            'it in the PAYMENT-SIGNATURE header (the legacy X-PAYMENT header is also accepted).',
+        },
+      };
     },
+  });
+
+  return {
+    [`GET ${config.resource.path}`]: makeRoute('GET'),
+    [`POST ${config.resource.path}`]: makeRoute('POST'),
   };
 }
 

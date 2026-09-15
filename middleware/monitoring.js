@@ -24,6 +24,7 @@ const metrics = {
   failedPayments: 0,
   paymentFailureReasons: {},
   revenueAtomicByAsset: {},
+  funnel: {},
   requestTimes: [],
 };
 
@@ -121,6 +122,43 @@ export function trackPaymentFailure(reason) {
 }
 
 /**
+ * Track a conversion-funnel event (free trial use, upsell view, paid call…).
+ * Backed by the same counters object so /metrics and /api/insights agree.
+ *
+ * @param {string} event - Event name (e.g. 'freeTrial', 'paidCall')
+ * @returns {void}
+ */
+export function trackFunnel(event) {
+  const key = String(event || 'unknown').slice(0, 60);
+  metrics.funnel[key] = (metrics.funnel[key] || 0) + 1;
+}
+
+/**
+ * Snapshot of buyer-behaviour signals for the growth loop.
+ *
+ * @returns {object} Funnel + revenue signals
+ */
+export function getInsights() {
+  const funnel = { ...metrics.funnel };
+  const freeTrial = funnel.freeTrial || 0;
+  const paidCalls = metrics.settledPayments;
+  return {
+    funnel,
+    conversion: {
+      freeTrials: freeTrial,
+      paidCalls,
+      // Paid calls per free trial — the single number pricing experiments move.
+      trialToPaidRate: freeTrial ? Number((paidCalls / freeTrial).toFixed(4)) : 0,
+    },
+    demand: {
+      unpaidChallenges: metrics.paymentRequiredResponses,
+      failedPayments: metrics.failedPayments,
+      failureReasons: { ...metrics.paymentFailureReasons },
+    },
+    revenueAtomicByAsset: { ...metrics.revenueAtomicByAsset },
+  };
+}
+/**
  * Snapshot current metrics.
  *
  * @returns {object} Metrics snapshot
@@ -140,6 +178,7 @@ export function getMetrics() {
     failedPayments: metrics.failedPayments,
     paymentFailureReasons: { ...metrics.paymentFailureReasons },
     revenueAtomicByAsset: { ...metrics.revenueAtomicByAsset },
+    funnel: { ...metrics.funnel },
     requestsPerMinute: Number(((metrics.totalRequests / uptimeSeconds) * 60).toFixed(2)),
     errorRatePercent: metrics.totalRequests
       ? Number(((metrics.totalErrors / metrics.totalRequests) * 100).toFixed(2))
@@ -167,5 +206,6 @@ export function resetMetrics() {
   metrics.failedPayments = 0;
   metrics.paymentFailureReasons = {};
   metrics.revenueAtomicByAsset = {};
+  metrics.funnel = {};
   metrics.requestTimes = [];
 }

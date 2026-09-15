@@ -21,7 +21,7 @@ describe('http endpoints', () => {
       assert.equal(body.payments.version, 2);
       assert.equal(body.payments.network, 'eip155:84532');
       assert.equal(body.payments.price, '$0.001');
-      assert.equal(body.endpoints.paid, 'GET /api/resource');
+      assert.equal(body.endpoints.paid, 'POST /api/resource');
       assert.equal(body.paywallReady, true);
     } finally {
       await server.close();

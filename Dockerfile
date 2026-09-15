@@ -16,7 +16,7 @@ WORKDIR /app
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
-COPY index.js app.js config.js x402.js logger.js ./
+COPY index.js app.js config.js x402.js logger.js sanitize.js ./
 COPY middleware ./middleware
 
 # Drop privileges; the node image ships an unprivileged `node` user.

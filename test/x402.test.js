@@ -46,29 +46,43 @@ function createSigningClient(network = 'eip155:84532') {
 
 /**
  * Perform the documented two-step unpaid -> signed -> retry flow.
+ * POSTs a sanitize job (the real product); GET variants are covered by the
+ * legacy test below.
  *
  * @param {object} server - Test server handle
  * @param {string} path - Path to request
  * @param {object} signing - Result of createSigningClient()
+ * @param {object} [body] - JSON body to POST
  * @returns {Promise<{ challenge: object, paymentPayload: object, response: Response }>}
  */
-async function payAndRetry(server, path, signing) {
-  const challengeResponse = await server.fetch(path);
+async function payAndRetry(server, path, signing, body = { text: 'Contact jane@example.com' }) {
+  const challengeResponse = await server.fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   const challenge = signing.httpClient.getPaymentRequiredResponse(
     (name) => challengeResponse.headers.get(name),
     await challengeResponse.json(),
   );
   const paymentPayload = await signing.coreClient.createPaymentPayload(challenge);
-  const headers = signing.httpClient.encodePaymentSignatureHeader(paymentPayload);
-  const response = await server.fetch(path, { headers });
+  const headers = {
+    ...signing.httpClient.encodePaymentSignatureHeader(paymentPayload),
+    'Content-Type': 'application/json',
+  };
+  const response = await server.fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
   return { challenge, paymentPayload, response };
 }
 
 describe('x402 payment flow', () => {
-  test('unpaid request returns 402 with a machine-readable challenge', async () => {
+  test('unpaid POST returns 402 with a machine-readable challenge', async () => {
     const server = await startTestServer();
     try {
-      const response = await server.fetch('/api/resource');
+      const response = await server.fetch('/api/resource', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' }),
+      });
 
       assert.equal(response.status, 402);
       assert.match(response.headers.get('content-type'), /application\/json/);
@@ -118,6 +132,8 @@ describe('x402 payment flow', () => {
 
       const body = await response.json();
       assert.equal(body.success, true);
+      // Real product shape: sanitized output, not a placeholder message.
+      assert.equal(body.clean, 'Contact [redacted-email]');
 
       // The facilitator was actually driven through verify + settle.
       assert.equal(server.facilitator.calls.verify, 1);
@@ -128,6 +144,25 @@ describe('x402 payment flow', () => {
       assert.equal(metrics.settledPayments, 1);
       assert.equal(metrics.revenueAtomicByAsset[BASE_SEPOLIA_USDC], '1000');
       assert.equal(metrics.failedPayments, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('legacy paid GET with ?text= still settles', async () => {
+    const server = await startTestServer();
+    try {
+      const signing = createSigningClient();
+      const challengeResponse = await server.fetch('/api/resource?text=hi');
+      const challenge = signing.httpClient.getPaymentRequiredResponse(
+        (name) => challengeResponse.headers.get(name),
+        await challengeResponse.json(),
+      );
+      const paymentPayload = await signing.coreClient.createPaymentPayload(challenge);
+      const headers = signing.httpClient.encodePaymentSignatureHeader(paymentPayload);
+      const response = await server.fetch('/api/resource?text=hi', { headers });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).success, true);
     } finally {
       await server.close();
     }
