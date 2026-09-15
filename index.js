@@ -1,6 +1,6 @@
 import express from 'express';
-import { verifyTypedData, createWalletClient, http, publicActions, parseSignature } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
@@ -9,12 +9,16 @@ app.use(express.json());
 const RECEIVING_WALLET = '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
-// In-memory nonce cache for replay protection (use Redis/DB in heavy production)
+// In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Setup server wallet executor for on-chain settlement
-// Requires SERVER_PRIVATE_KEY env var on Railway with Base ETH for gas
-const serverPrivateKey = process.env.SERVER_PRIVATE_KEY || '0x0000000000000000000000000000000000000000000000000000000000000000';
+// Safely handle private key: use env var if present, otherwise generate or warn
+let serverPrivateKey = process.env.SERVER_PRIVATE_KEY;
+if (!serverPrivateKey || serverPrivateKey === '0x0000000000000000000000000000000000000000000000000000000000000000') {
+  console.warn('WARNING: SERVER_PRIVATE_KEY not set or invalid. On-chain settlement will fail until funded/configured.');
+  serverPrivateKey = generatePrivateKey(); // fallback to prevent startup crash
+}
+
 const serverAccount = privateKeyToAccount(serverPrivateKey);
 const serverClient = createWalletClient({
   account: serverAccount,
