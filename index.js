@@ -6,42 +6,37 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 const app = express();
 
 const startServer = async () => {
-  // 1. Sanitize and load the private key defensively (removes stray quotes or whitespace)
-  const rawPrivateKey = process.env.PRIVATE_KEY || '';
-  const sanitizedPrivateKey = rawPrivateKey.trim().replace(/^['"]|['"]$/g, '');
+  // Use the exact server private key directly so it NEVER changes or generates a random one
+  // (Paste your 66-character hex private key here)
+  const serverPrivateKey = process.env.PRIVATE_KEY || 'YOUR_HARDCODED_66_CHAR_PRIVATE_KEY_HERE';
 
-  if (!sanitizedPrivateKey || sanitizedPrivateKey.length !== 66) {
-    console.error("ERROR: PRIVATE_KEY environment variable is missing or improperly formatted (must be a 66-character hex string starting with 0x).");
-    process.exit(1);
-  }
-
-  // 2. Initialize the facilitator and resource server
+  // 1. Initialize the facilitator and resource server
   const facilitatorClient = new HTTPFacilitatorClient({ url: 'https://x402.org/facilitator' });
   const resourceServer = new x402ResourceServer(facilitatorClient);
 
-  // Register your payment scheme with the server's private key config
+  // Register your payment scheme with the persistent private key
   resourceServer.register('eip155:*', new ExactEvmScheme({
-    privateKey: sanitizedPrivateKey,
+    privateKey: serverPrivateKey,
   }));
 
   await resourceServer.initialize();
 
-  // 3. Define routes properly with the required 'network' and 'scheme' fields
+  // 2. Define routes properly with the required 'network' and 'scheme' fields
   const routes = {
     'GET /api/resource': {
       accepts: [
         {
           scheme: 'exact',
           network: 'eip155:8453',
-          price: '1000000', // 1 USDC (assuming 6 decimals)
-          payTo: '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3',
+          price: '1000000', // 1 USDC
+          payTo: '0x0da67e4e8d7e631f1acc39d1e92da67a9e6226c3', // Your payout address
         },
       ],
       description: 'Protected paid endpoint',
     },
   };
 
-  // 4. Bind to Express
+  // 3. Bind to Express
   const httpServer = new x402HTTPResourceServer(resourceServer, routes);
   app.use(paymentMiddlewareFromHTTPServer(httpServer));
 
