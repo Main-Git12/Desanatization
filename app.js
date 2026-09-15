@@ -14,6 +14,7 @@ import {
   trackFunnel,
   trackPayment,
   trackPaymentFailure,
+  trackReferral,
   trackRequests,
 } from './middleware/monitoring.js';
 import { createRateLimiter } from './middleware/rateLimiter.js';
@@ -23,7 +24,16 @@ import {
   extractPaymentHeader,
   handleBodyParseErrors,
 } from './middleware/validation.js';
-import { FREE_TIER_MAX_CHARS, sanitizeText, validateSanitizeBody } from './sanitize.js';
+import {
+  BATCH_MAX_ITEMS,
+  FREE_TIER_MAX_CHARS,
+  cacheStats,
+  sanitizeCached,
+  sanitizeText,
+  validateBatchBody,
+  validateRef,
+  validateSanitizeBody,
+} from './sanitize.js';
 
 const STARTED_AT = Date.now();
 

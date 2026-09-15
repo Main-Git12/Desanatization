@@ -25,6 +25,11 @@ const metrics = {
   paymentFailureReasons: {},
   revenueAtomicByAsset: {},
   funnel: {},
+  // Verifiable proof buyers actually got value: recent settled receipts
+  // (tx, payer, amount — public on-chain facts, safe to publish).
+  receipts: [],
+  // Referral leaderboard: which ?ref= brought paying buyers.
+  referrals: {},
   requestTimes: [],
 };
 
@@ -100,11 +105,34 @@ export function trackRequests(loggerInstance = logger) {
  */
 export function trackPayment({ amount, asset = 'unknown', payer, network, transaction } = {}) {
   metrics.settledPayments++;
+  trackFunnel('paidCall');
   const key = `${asset}`;
   metrics.revenueAtomicByAsset[key] = String(BigInt(metrics.revenueAtomicByAsset[key] || '0') + BigInt(amount || '0'));
+  // Ring buffer of the last 20 receipts — the social proof feed.
+  metrics.receipts.unshift({
+    transaction: transaction || 'n/a',
+    payer: payer || 'unknown',
+    amount: String(amount || '0'),
+    asset: key,
+    network: network || 'unknown',
+    at: new Date().toISOString(),
+  });
+  if (metrics.receipts.length > 20) metrics.receipts.length = 20;
   logger.info(
     `Payment settled: ${amount} of ${asset} on ${network || 'unknown'} from ${payer || 'unknown'} (tx ${transaction || 'n/a'})`,
   );
+}
+
+/**
+ * Credit a referral id for a settled payment (agent-recommends-agent loop).
+ *
+ * @param {string|undefined} ref - Validated referral id
+ * @returns {void}
+ */
+export function trackReferral(ref) {
+  if (!ref) return;
+  metrics.referrals[ref] = (metrics.referrals[ref] || 0) + 1;
+  trackFunnel(`ref:${ref}`);
 }
 
 /**
@@ -142,6 +170,10 @@ export function getInsights() {
   const funnel = { ...metrics.funnel };
   const freeTrial = funnel.freeTrial || 0;
   const paidCalls = metrics.settledPayments;
+  const referrals = Object.entries(metrics.referrals)
+    .map(([ref, sales]) => ({ ref, sales }))
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 10);
   return {
     funnel,
     conversion: {
@@ -155,6 +187,7 @@ export function getInsights() {
       failedPayments: metrics.failedPayments,
       failureReasons: { ...metrics.paymentFailureReasons },
     },
+    referrals,
     revenueAtomicByAsset: { ...metrics.revenueAtomicByAsset },
   };
 }
@@ -207,5 +240,7 @@ export function resetMetrics() {
   metrics.paymentFailureReasons = {};
   metrics.revenueAtomicByAsset = {};
   metrics.funnel = {};
+  metrics.receipts = [];
+  metrics.referrals = {};
   metrics.requestTimes = [];
 }
