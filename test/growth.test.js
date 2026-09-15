@@ -251,6 +251,20 @@ describe('outbound growth engine', () => {
     assert.equal(targets[0].score, 1);
   });
 
+  test('parseTargets falls back to the quote-proof url|kind list format', async () => {
+    const { parseTargets } = await import('../growth.js');
+    // This is what Railway looks like after it strips double quotes:
+    const stripped = '[{url:https://a.example,kind:canary}]';
+    assert.deepEqual(parseTargets(stripped), []); // mangled JSON yields nothing
+    const targets = parseTargets('https://a.example/|canary, https://b.example');
+    assert.equal(targets.length, 2);
+    assert.equal(targets[0].url, 'https://a.example');
+    assert.equal(targets[0].kind, 'canary');
+    assert.equal(targets[1].url, 'https://b.example');
+    assert.equal(targets[1].kind, 'manual');
+    assert.equal(targets[1].score, 1);
+  });
+
   test('mergeDiscovered dedupes by URL and keeps learned scores', async () => {
     const { mergeDiscovered } = await import('../growth.js');
     const existing = [{ url: 'https://a.example', kind: 'manual', score: 3.5, pitches: 2, responses: 1 }];

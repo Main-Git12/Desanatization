@@ -36,8 +36,9 @@ const X402_CHALLENGE_HEADER = 'payment-required';
  */
 export function parseTargets(raw) {
   if (!raw || String(raw).trim() === '') return [];
+  const input = String(raw).trim();
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(input);
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((t) => t && typeof t.url === 'string' && /^https?:\/\//.test(t.url))
@@ -49,8 +50,20 @@ export function parseTargets(raw) {
         responses: 0,
       }));
   } catch {
-    return [];
+    // Fall through to the shell-friendly format below.
   }
+  // Quote-proof fallback: "https://a|kind, https://b" — some hosts (Railway
+  // CLI) strip double quotes from variable values, so JSON is not reliable.
+  return input
+    .split(/[,\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const [url, kind] = part.split('|');
+      return { url: url?.replace(/\/+$/, ''), kind: (kind ?? 'manual').slice(0, 32) };
+    })
+    .filter((t) => /^https?:\/\//.test(t.url))
+    .map((t) => ({ ...t, score: 1, pitches: 0, responses: 0 }));
 }
 
 /**
