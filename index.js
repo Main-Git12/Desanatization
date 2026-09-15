@@ -8,19 +8,23 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-const routes = {
-  '/api/resource': {
-    price: config.price,
-    network: config.network,
-    extensions: {},
-  },
+// Initialize server instance
+const server = new x402HTTPResourceServer();
+
+// Define full route config including explicit extensions object
+const routeConfig = {
+  price: config.price || '$0.001',
+  network: config.network || 'base-sepolia',
+  extensions: {},
+  description: 'Protected API Resource',
 };
 
-const server = new x402HTTPResourceServer({
-  schemes: config.schemes,
-  paywall: config.paywall,
-  routes: routes,
-});
+const routes = {
+  '/api/resource': routeConfig,
+};
+
+// Register route directly on server instance
+server.register('/api/resource', routeConfig);
 
 app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   res.json({
