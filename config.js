@@ -11,6 +11,7 @@ export function loadConfig() {
     payToAddress: payToAddress,
     schemes: [],
     paywall: {
+      payTo: payToAddress,
       routes: {
         '/api/resource': {
           price: '$0.001',

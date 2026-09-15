@@ -8,22 +8,21 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Define explicit route configuration with required extensions object
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
+  payTo: config.payToAddress,
   extensions: {},
-  description: 'Protected API Resource',
 };
 
 const routes = {
   '/api/resource': routeConfig,
 };
 
-// 2. Supply routes directly into paywall and constructor options
 const server = new x402HTTPResourceServer({
   schemes: config.schemes || [],
   paywall: {
+    payTo: config.payToAddress,
     routes: routes,
   },
   routes: routes,
