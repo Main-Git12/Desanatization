@@ -8,6 +8,7 @@ import {
   ConfigError,
   describeConfig,
   loadConfig,
+  MAINNET_NETWORKS,
   normaliseNetwork,
   normalisePrice,
   parseAllowedOrigins,
@@ -111,9 +112,10 @@ describe('config', () => {
     assert.match(error.message, /localhost/);
   });
 
-  test('warns when a mainnet network is paired with the testnet facilitator', () => {
-    const config = loadConfig({ ...baseEnv, NETWORK: 'eip155:8453' });
-    assert.match(config.warnings.join(' '), /public testnet facilitator/);
+  test('refuses mainnet network paired with the testnet facilitator', () => {
+    const error = captureThrow(() => loadConfig({ ...baseEnv, NETWORK: 'eip155:8453' }));
+    assert.ok(error instanceof ConfigError);
+    assert.match(error.message, /can never settle/);
   });
 
   test('describeConfig never leaks secrets', () => {
@@ -130,5 +132,49 @@ describe('config', () => {
   test('config is frozen so it cannot be mutated at runtime', () => {
     const config = loadConfig(baseEnv);
     assert.equal(Object.isFrozen(config), true);
+  });
+});
+
+describe('go-live guards', () => {
+  test('mainnet + CDP facilitator with named auth headers loads cleanly', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      NETWORK: 'eip155:8453',
+      FACILITATOR_URL: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      FACILITATOR_AUTH_HEADERS: JSON.stringify({
+        'X-CDP-API-KEY-ID': 'id-123',
+        'X-CDP-API-KEY-SECRET': 'secret-456',
+      }),
+    });
+    assert.equal(config.network, 'eip155:8453');
+    assert.deepEqual(config.facilitator.authHeaders, {
+      'X-CDP-API-KEY-ID': 'id-123',
+      'X-CDP-API-KEY-SECRET': 'secret-456',
+    });
+    assert.equal(config.facilitator.authHeader, undefined);
+  });
+
+  test('mainnet without any facilitator credential produces a loud warning', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      NETWORK: 'eip155:8453',
+      FACILITATOR_URL: 'https://api.cdp.coinbase.com/platform/v2/x402',
+    });
+    assert.ok(
+      config.warnings.some((w) => /no FACILITATOR_AUTH_HEADER\/HEADERS/.test(w)),
+      `expected auth warning, got: ${JSON.stringify(config.warnings)}`,
+    );
+  });
+
+  test('malformed FACILITATOR_AUTH_HEADERS is a config error', () => {
+    const error = captureThrow(() => loadConfig({ ...baseEnv, FACILITATOR_AUTH_HEADERS: 'not-json' }));
+    assert.ok(error instanceof ConfigError);
+    assert.match(error.message, /FACILITATOR_AUTH_HEADERS/);
+  });
+
+  test('MAINNET_NETWORKS covers Base and Ethereum but not Base Sepolia', () => {
+    assert.ok(MAINNET_NETWORKS.has('eip155:8453'));
+    assert.ok(MAINNET_NETWORKS.has('eip155:1'));
+    assert.ok(!MAINNET_NETWORKS.has('eip155:84532'));
   });
 });

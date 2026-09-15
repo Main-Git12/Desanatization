@@ -28,7 +28,17 @@ export function createFacilitatorClient(config) {
     timeoutMs: config.facilitator.timeoutMs,
   };
 
-  if (config.facilitator.authHeader) {
+  if (config.facilitator.authHeaders) {
+    // Some facilitators (e.g. Coinbase CDP) require named API headers rather
+    // than a Bearer token — pass the configured map verbatim.
+    const headers = { ...config.facilitator.authHeaders };
+    options.createAuthHeaders = async () => ({
+      verify: headers,
+      settle: headers,
+      supported: headers,
+      bazaar: headers,
+    });
+  } else if (config.facilitator.authHeader) {
     // The SDK requires headers keyed by request path, not a flat header object.
     const headers = { Authorization: config.facilitator.authHeader };
     options.createAuthHeaders = async () => ({

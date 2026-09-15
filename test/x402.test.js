@@ -168,7 +168,9 @@ describe('x402 payment flow', () => {
     }
   });
 test('mainnet configuration prices in mainnet USDC', async () => {
-    const server = await startTestServer({ env: { NETWORK: 'eip155:8453' } });
+    const server = await startTestServer({
+      env: { NETWORK: 'eip155:8453', FACILITATOR_URL: 'https://facilitator.example' },
+    });
     try {
       const response = await server.fetch('/api/resource');
       const challenge = decodePaymentRequiredHeader(response.headers.get('payment-required'));

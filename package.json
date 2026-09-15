@@ -1,6 +1,6 @@
 {
   "name": "desanatization-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Production-ready x402 (v2) payment-gated API server for AI agents.",
   "type": "module",
   "main": "index.js",
@@ -12,7 +12,8 @@
     "dev": "node --watch index.js",
     "test": "node --test",
     "test:watch": "node --test --watch",
-    "client": "node clients/fetch-client.mjs"
+    "client": "node clients/fetch-client.mjs",
+    "preflight": "node scripts/preflight.mjs"
   },
   "keywords": [
     "x402",

@@ -172,6 +172,30 @@ export function parseAllowedOrigins(raw) {
 }
 
 /**
+ * Parse FACILITATOR_AUTH_HEADERS — a JSON object of named request headers.
+ *
+ * @param {string|undefined} raw - JSON object string, e.g. '{"X-CDP-API-KEY-ID":"..."}'
+ * @param {string[]} problems - Collector for validation errors
+ * @returns {Record<string, string>|undefined} Header map when valid
+ */
+function parseAuthHeaders(raw, problems) {
+  if (raw === undefined || String(raw).trim() === '') return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+      Object.values(parsed).every((v) => typeof v === 'string')
+    ) {
+      return parsed;
+    }
+    problems.push('FACILITATOR_AUTH_HEADERS must be a JSON object of string values');
+  } catch {
+    problems.push('FACILITATOR_AUTH_HEADERS is not valid JSON');
+  }
+  return undefined;
+}
+
+/**
  * Load and validate configuration.
  *
  * @param {Record<string, string|undefined>} [env] - Environment source (defaults to process.env)
@@ -214,12 +238,29 @@ export function loadConfig(env = process.env) {
     problems.push(`FACILITATOR_URL is not a valid URL (received "${facilitatorUrl}")`);
   }
 
-  // Warn for any environment: pointing a real-value network at the public
-  // testnet facilitator is the single most likely reason for earning nothing.
+  // A mainnet network pointed at the public TESTNET facilitator can never
+  // settle a payment — the facilitator's supported list has no mainnet EVM
+  // networks. That is not a warning; it is a config that earns nothing, so
+  // refuse to boot on it (in every environment).
   if (facilitatorUrl.includes('x402.org') && network && MAINNET_NETWORKS.has(network)) {
+    problems.push(
+      `FACILITATOR_URL is the public TESTNET facilitator (x402.org) but NETWORK=${network} is a mainnet. ` +
+        'That combination can never settle a payment. Use a production facilitator ' +
+        '(e.g. https://api.cdp.coinbase.com/platform/v2/x402 with FACILITATOR_AUTH_HEADERS) ' +
+        'or set NETWORK=eip155:84532 for the free testnet.',
+    );
+  }
+
+  // Most production facilitators require an API credential. Booting a mainnet
+  // without any credential is legal only for facilitators that need none, so
+  // surface it as a loud warning rather than an error.
+  if (
+    network && MAINNET_NETWORKS.has(network) &&
+    !env.FACILITATOR_AUTH_HEADER && !env.FACILITATOR_AUTH_HEADERS
+  ) {
     warnings.push(
-      `FACILITATOR_URL is the public testnet facilitator (x402.org) but NETWORK=${network} is a mainnet. ` +
-        'Use a production facilitator (e.g. Coinbase CDP, PayAI) to accept real payments.',
+      `NETWORK=${network} is mainnet but no FACILITATOR_AUTH_HEADER/HEADERS is set. ` +
+        'If your facilitator requires an API key, verify calls will 401 and no payments will settle.',
     );
   }
 
@@ -249,6 +290,10 @@ export function loadConfig(env = process.env) {
       // Sent as `Authorization` on verify/settle/supported/bazaar calls.
       // Required by some production facilitators (e.g. Coinbase CDP).
       authHeader: String(env.FACILITATOR_AUTH_HEADER || '').trim() || undefined,
+      // Some production facilitators need named headers instead of a Bearer
+      // token (e.g. Coinbase CDP wants X-CDP-API-KEY-ID / X-CDP-API-KEY-SECRET).
+      // Provide them as a JSON object string.
+      authHeaders: parseAuthHeaders(env.FACILITATOR_AUTH_HEADERS, problems),
     },
 
     network,
