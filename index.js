@@ -1,32 +1,38 @@
 import express from 'express';
 import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
 app.use(express.json());
 
 // ==========================================
-// CONFIGURATION: LOCKED PERMANENT WALLET
+// CONFIGURATION: PERMANENT WALLET
 // ==========================================
-// Replace the string below with your exact funded private key (or leave 
-// process.env.SERVER_PRIVATE_KEY if you want to keep using Railway's variables).
-const PERMANENT_PRIVATE_KEY = process.env.SERVER_PRIVATE_KEY || '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d';
-
-// Hardcoded to match your active funded wallet address so caller == payee
+// Put your real 64-character hex private key here (with or without '0x')
+const PERMANENT_PRIVATE_KEY = process.env.SERVER_PRIVATE_KEY || '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d'; 
 const RECEIVING_WALLET = '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d';
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
 // In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Clean and validate private key format
-let rawKey = PERMANENT_PRIVATE_KEY.trim().replace(/^["']|["']$/g, '');
+// Clean and sanitize private key string
+let rawKey = String(PERMANENT_PRIVATE_KEY || '').trim().replace(/^["']|["']$/g, '');
 if (!rawKey.startsWith('0x')) {
   rawKey = '0x' + rawKey;
 }
 
-const serverAccount = privateKeyToAccount(rawKey);
+// Fallback if placeholder is detected
+let serverPrivateKey;
+if (rawKey.includes('YOUR_EXACT') || rawKey.length !== 66) {
+  console.warn('WARNING: Invalid or placeholder private key detected. Generating a temporary test key.');
+  serverPrivateKey = generatePrivateKey();
+} else {
+  serverPrivateKey = rawKey;
+}
+
+const serverAccount = privateKeyToAccount(serverPrivateKey);
 console.log(`Server wallet executor & payee address: ${serverAccount.address}`);
 
 const serverClient = createWalletClient({
