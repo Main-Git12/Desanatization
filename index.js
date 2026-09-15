@@ -9,25 +9,27 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Define routes using the HTTP method prefix and 'accepts' block
+// 1. `accepts` must be an ARRAY of payment option objects
 const routes = {
   'GET /api/resource': {
-    accepts: {
-      scheme: 'exact',
-      price: config.price || '$0.001',
-      network: config.network || 'base-sepolia',
-      payTo: config.payToAddress,
-    },
+    accepts: [
+      {
+        scheme: 'exact',
+        price: config.price || '$0.001',
+        network: config.network || 'base-sepolia',
+        payTo: config.payToAddress,
+      },
+    ],
     description: 'Protected API Resource',
     mimeType: 'application/json',
   },
 };
 
-// 2. Initialize the underlying resource server and the HTTP server wrapper
+// 2. Initialize resource server & HTTP server
 const resourceServer = new x402ResourceServer();
 const httpServer = new x402HTTPResourceServer(resourceServer, routes);
 
-// 3. Attach payment middleware
+// 3. Attach paymentMiddleware with instantiated httpServer
 app.get('/api/resource', paymentMiddleware(httpServer, routes), (req, res) => {
   res.json({
     status: 'success',
