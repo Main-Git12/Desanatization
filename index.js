@@ -8,10 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// Initialize server instance
-const server = new x402HTTPResourceServer();
-
-// Define full route config including explicit extensions object
+// 1. Define complete route configuration object
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
@@ -23,8 +20,14 @@ const routes = {
   '/api/resource': routeConfig,
 };
 
-// Register route directly on server instance
-server.register('/api/resource', routeConfig);
+// 2. Instantiate server passing routes explicitly in config
+const server = new x402HTTPResourceServer({
+  schemes: config.schemes || [],
+  paywall: {
+    routes: routes,
+  },
+  routes: routes,
+});
 
 app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   res.json({
