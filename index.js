@@ -21,9 +21,8 @@ const paymentConfig = {
     {
       scheme: 'exact',
       network: 'eip155:8453',
-      amount: '10000',           // Atomic units (0.01 USDC with 6 decimals)
-      value: '10000',            // Fallback for amount parsers
-      maxAmountRequired: '10000', // Explicit max amount required to prevent NaN parsing
+      amount: '10000',           // Must be a string representing atomic units (0.01 USDC)
+      maxAmountRequired: '10000', // Explicitly matches parser expectations to prevent NaN
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base Mainnet
       payTo: RECEIVING_WALLET,
       extra: {
