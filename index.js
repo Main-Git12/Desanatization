@@ -8,7 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Define complete route configuration object
+// 1. Define explicit route configuration with required extensions object
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
@@ -20,7 +20,7 @@ const routes = {
   '/api/resource': routeConfig,
 };
 
-// 2. Instantiate server passing routes explicitly in config
+// 2. Supply routes directly into paywall and constructor options
 const server = new x402HTTPResourceServer({
   schemes: config.schemes || [],
   paywall: {
