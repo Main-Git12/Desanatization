@@ -1,6 +1,8 @@
 // ============================================================================
 // Rate Limiting Middleware
-// Prevents abuse and ensures fair service distribution
+//
+// In-memory fixed-window limiter. Sized for a single Railway instance; swap the
+// store for Redis if you ever scale horizontally.
 // ============================================================================
 
 import { createLogger } from '../logger.js';
@@ -8,31 +10,38 @@ import { createLogger } from '../logger.js';
 const logger = createLogger('rate-limiter');
 
 const defaultConfig = {
-  windowMs: 15 * 60 * 1000,      // 15 minutes
-  maxRequests: 100,               // 100 requests per window
-  keyGenerator: (req) => req.ip,  // Use IP as key
-  skip: (req) => false,           // Don't skip any requests
+  windowMs: 60 * 1000, // 1 minute
+  maxRequests: 60,
+  keyGenerator: (req) => req.ip,
+  skip: () => false,
+  // Upper bound on tracked keys. Prevents unbounded memory growth when the
+  // endpoint is hit by many distinct IPs (e.g. a botnet).
+  maxTrackedKeys: 10_000,
 };
 
 /**
- * Simple in-memory rate limiter
- * For production, consider Redis for distributed rate limiting
+ * Create a fixed-window rate limiter.
+ *
+ * @param {object} [config] - Overrides for the defaults above
+ * @returns {(req: object, res: object, next: Function) => void} Middleware
  */
 export function createRateLimiter(config = {}) {
   const settings = { ...defaultConfig, ...config };
   const store = new Map();
 
-  // Cleanup old entries periodically
-  setInterval(() => {
+  // Cleanup expired entries. `unref()` keeps this timer from holding the
+  // process open on shutdown.
+  const cleanup = setInterval(() => {
     const now = Date.now();
     for (const [key, data] of store.entries()) {
-      if (now - data.resetTime > settings.windowMs) {
+      if (now - data.resetTime >= settings.windowMs) {
         store.delete(key);
       }
     }
-  }, settings.windowMs);
+  }, Math.max(settings.windowMs, 1000));
+  cleanup.unref?.();
 
-  return (req, res, next) => {
+  const handler = (req, res, next) => {
     if (settings.skip(req)) {
       return next();
     }
@@ -41,31 +50,30 @@ export function createRateLimiter(config = {}) {
     const now = Date.now();
     let record = store.get(key);
 
-    // Initialize or reset record if window expired
-    if (!record || now - record.resetTime > settings.windowMs) {
-      record = {
-        count: 0,
-        resetTime: now,
-      };
+    if (!record || now - record.resetTime >= settings.windowMs) {
+      if (store.size >= settings.maxTrackedKeys && !store.has(key)) {
+        // Evict the oldest window rather than growing without bound.
+        const oldestKey = store.keys().next().value;
+        store.delete(oldestKey);
+      }
+      record = { count: 0, resetTime: now };
       store.set(key, record);
     }
 
     record.count++;
-
-    // Set rate limit headers
-    const remainingRequests = Math.max(0, settings.maxRequests - record.count);
-    const resetTime = Math.ceil((record.resetTime + settings.windowMs - now) / 1000);
-
     res.setHeader('X-RateLimit-Limit', settings.maxRequests);
-    res.setHeader('X-RateLimit-Remaining', remainingRequests);
-    res.setHeader('X-RateLimit-Reset', Math.floor((record.resetTime + settings.windowMs) / 1000));
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, settings.maxRequests - record.count));
+    res.setHeader('X-RateLimit-Reset', Math.ceil((record.resetTime + settings.windowMs) / 1000));
 
     if (record.count > settings.maxRequests) {
-      logger.warn(`Rate limit exceeded for ${key}`);
+      const retryAfter = Math.ceil((record.resetTime + settings.windowMs - now) / 1000);
+      res.setHeader('Retry-After', retryAfter);
+      logger.warn(`Rate limit exceeded for ${key} on ${req.method} ${req.path}`);
       return res.status(429).json({
         error: 'Too many requests',
-        retryAfter: resetTime,
-        message: `Maximum ${settings.maxRequests} requests per ${settings.windowMs / 1000 / 60} minutes`,
+        retryAfter,
+        limit: settings.maxRequests,
+        windowMs: settings.windowMs,
         requestId: req.id,
         timestamp: new Date().toISOString(),
       });
@@ -73,26 +81,36 @@ export function createRateLimiter(config = {}) {
 
     next();
   };
+
+  /** Release the cleanup timer (used by tests and graceful shutdown). */
+  handler.dispose = () => clearInterval(cleanup);
+
+  return handler;
 }
 
 /**
- * Stricter rate limiter for payment endpoints
+ * Limiter intended for the payment-gated routes.
+ *
+ * Deep enough that a paying agent is never throttled mid-purchase, tight
+ * enough to stop unpaid 402-scraping from being free.
+ *
+ * @param {object} [overrides] - Optional overrides
+ * @returns {(req: object, res: object, next: Function) => void} Middleware
  */
-export function createPaymentRateLimiter() {
+export function createPaymentRateLimiter(overrides = {}) {
   return createRateLimiter({
-    windowMs: 60 * 1000,           // 1 minute
-    maxRequests: 10,               // 10 requests per minute
-    keyGenerator: (req) => req.ip,
+    windowMs: 60 * 1000,
+    maxRequests: 120,
+    ...overrides,
   });
 }
 
 /**
- * Per-user rate limiter (requires authentication)
+ * Stop the cleanup timer. Exposed for tests and graceful shutdown.
+ *
+ * @param {Function} middleware - Middleware returned by createRateLimiter
+ * @returns {void}
  */
-export function createPerUserRateLimiter() {
-  return createRateLimiter({
-    windowMs: 60 * 60 * 1000,      // 1 hour
-    maxRequests: 1000,             // 1000 requests per hour
-    keyGenerator: (req) => req.user?.id || req.ip,
-  });
+export function disposeRateLimiter(middleware) {
+  middleware?.dispose?.();
 }

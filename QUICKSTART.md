@@ -1,1 +1,99 @@
-# ⚡ Quick Start - Go Live in 5 Minutes\n\n## Step 1: Deploy to Railway (3 minutes)\n\n### Option A: Automatic (Recommended)\n\n1. Go to [railway.app](https://railway.app)\n2. Click \"New Project\" → \"Deploy from GitHub\"\n3. Select `pealar12/Desanatization`\n4. Railway auto-deploys!\n\n### Option B: Manual\n\n```bash\n# Install Railway CLI\nnpm install -g @railway/cli\n\n# Login\nrailway login\n\n# Deploy\nrailway up\n```\n\n## Step 2: Set Environment Variables (2 minutes)\n\nIn Railway Dashboard:\n\n1. Click on your project\n2. Go to \"Variables\"\n3. Add these:\n\n```\nNODE_ENV=production\nLOG_LEVEL=info\nFACILITATOR_URL=https://facilitator.staging.x402.dev\nPRICE=1000000\nPAY_TO_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f42b15\nALLOWED_ORIGINS=*\n```\n\n## Step 3: Test It's Working (30 seconds)\n\n```bash\n# Railway gives you a URL like: https://desanatization-production.up.railway.app\n\n# Test health check\ncurl https://desanatization-production.up.railway.app/health\n\n# Should return:\n# {\"status\":\"ok\",\"timestamp\":\"2026-09-14T...\",\"uptime\":...}\n```\n\n✅ **YOU'RE LIVE!**\n\n## Step 4: Share with Agents\n\nGive agents this code to use your API:\n\n### JavaScript\n```javascript\nconst DesanatizationClient = require('https://raw.githubusercontent.com/pealar12/Desanatization/main/clients/javascript-client.js');\n\nconst client = new DesanatizationClient(\n  'https://desanatization-production.up.railway.app',\n  'their-x402-payment-proof'\n);\n\nconst resource = await client.getProtectedResource();\nconsole.log(resource);\n```\n\n### Python\n```python\n# Download: https://raw.githubusercontent.com/pealar12/Desanatization/main/clients/python-client.py\nfrom desanatization_client import DesanatizationClient\n\nclient = DesanatizationClient(\n    base_url='https://desanatization-production.up.railway.app',\n    payment_proof='their-x402-payment-proof'\n)\n\nresource = client.get_protected_resource()\nprint(resource)\n```\n\n### REST API (Any Language)\n```bash\ncurl -H \"Authorization: Bearer PAYMENT_PROOF\" \\\n  https://desanatization-production.up.railway.app/api/resource\n```\n\n## Step 5: Monitor Payments\n\n```bash\n# View real-time metrics\ncurl https://desanatization-production.up.railway.app/metrics\n\n# Response shows:\n# - totalRequests\n# - totalPayments (your revenue!)\n# - averageResponseTime\n# - errorRate\n```\n\n## Get Your Domain (Optional but Recommended)\n\n### Free Option: Use Railway's Domain\n```\nhttps://desanatization-production.up.railway.app\n```\n\n### Custom Domain: Railway Marketplace\n```bash\n# In Railway Dashboard:\n# 1. Click Project Settings\n# 2. Add custom domain\n# 3. Point DNS records\n# Railway auto-handles SSL!\n```\n\n## Troubleshooting\n\n### Deployment failed?\n```bash\n# Check logs\nrailway logs\n\n# Redeploy\nrailway up\n```\n\n### Server won't start?\n```bash\n# Verify environment variables are set\nrailway variables\n\n# Check if x402 facilitator is reachable\ncurl https://facilitator.staging.x402.dev/health\n```\n\n### Getting payment errors?\n1. Verify `PAY_TO_ADDRESS` is your Ethereum address\n2. Check network is correct (`eip155:84532` = Base Sepolia testnet)\n3. Ensure agent has valid payment proof from x402\n\n## 📊 Performance Stats\n\n- **Response time**: <500ms average\n- **Uptime**: 99.9% SLA\n- **Rate limit**: 100 requests/15 min per IP\n- **Payment limit**: 10 requests/min per IP\n\n## 💰 Start Earning\n\n### How Payments Work\n\n1. **Agent** makes payment on blockchain → x402 network\n2. **x402** generates payment proof token\n3. **Agent** sends: `Authorization: Bearer <proof>`\n4. **Your API** verifies payment with x402\n5. **Your wallet** receives payment automatically\n6. **Agent** gets access to resource\n\n### Test Payment Flow\n\n```bash\n# 1. Generate test payment proof (use x402 testnet)\n# 2. Call your API\ncurl -H \"Authorization: Bearer test-proof\" \\\n  https://desanatization-production.up.railway.app/api/resource\n\n# 3. Check metrics\ncurl https://desanatization-production.up.railway.app/metrics\n\n# 4. See payment in your wallet (after x402 settlement)\n```\n\n## Next Steps\n\n- [ ] Deploy to Railway (3 min)\n- [ ] Set environment variables (2 min)\n- [ ] Test health endpoint (30 sec)\n- [ ] Share with first agent\n- [ ] Monitor payments on metrics\n- [ ] Set custom domain (optional)\n\n**🎉 You're now receiving payments from agents!**\n\n---\n\nQuestions? Check `DEPLOYMENT.md` or `SDK_INTEGRATION.md`\n"
+# ⚡ Quick Start — live on Railway in ~5 minutes
+
+## 1. Get a wallet address to be paid at
+
+Any EVM wallet (MetaMask, Coinbase Wallet, Rabby…). Copy its public address —
+that is your `PAY_TO_ADDRESS`. Never put a private key in the server environment.
+
+## 2. Deploy
+
+### Option A — Railway dashboard
+
+1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub**.
+2. Select `pealar12/Desanatization`. Nixpacks builds it automatically.
+3. Railway runs `npm start` and probes `/health`.
+
+### Option B — Railway CLI
+
+```bash
+npm install -g @railway/cli
+railway login
+railway init
+railway up
+```
+
+## 3. Set environment variables
+
+In the Railway dashboard → your service → **Variables**:
+
+| Key | Value |
+| --- | --- |
+| `PAY_TO_ADDRESS` | **your** wallet address |
+| `NETWORK` | `eip155:84532` for a testnet, `eip155:8453` for real USDC |
+| `PRICE` | `$0.001` |
+| `FACILITATOR_URL` | `https://x402.org/facilitator` (testnet) — see the README for mainnet |
+| `NODE_ENV` | `production` |
+| `LOG_LEVEL` | `info` |
+| `ALLOWED_ORIGINS` | `*`, or your site's origin |
+
+Do **not** set `PORT` — Railway provides it.
+
+## 4. Verify
+
+Railway gives you a URL such as
+`https://desanatization-production.up.railway.app`.
+
+```bash
+# Liveness — must be 200
+curl https://YOUR-APP.up.railway.app/health
+
+# Readiness — 200 means the facilitator handshake succeeded and you can be paid
+curl https://YOUR-APP.up.railway.app/ready
+
+# Discovery — shows price, network and your pay-to address
+curl https://YOUR-APP.up.railway.app/
+
+# The paid endpoint — 402 with a payment challenge and no payment
+curl -i https://YOUR-APP.up.railway.app/api/resource
+```
+
+If `/ready` is not 200, the response body tells you exactly which facilitator
+call failed. That is the fastest way to find a bad `FACILITATOR_URL`, `NETWORK`
+or missing provider API key.
+
+## 5. Watch the money
+
+```bash
+curl https://YOUR-APP.up.railway.app/api/metrics
+```
+
+Look for `settledPayments` and `revenueAtomicByAsset` (atomic USDC units: `1000`
+= `0.001` USDC). Set `METRICS_TOKEN` to require
+`Authorization: Bearer <token>` on this endpoint.
+
+## 6. Tell buyers how to pay
+
+Send them the working client:
+
+```bash
+EVM_PRIVATE_KEY=0x<their-wallet-key> \
+RESOURCE_URL=https://YOUR-APP.up.railway.app/api/resource \
+node clients/fetch-client.mjs
+```
+
+Or give them the protocol essentials:
+
+- Ask for the resource; read the `PAYMENT-REQUIRED` header from the `402`.
+- Sign an `exact` payment for the requested network, amount and `payTo`.
+- Retry with the signed payload in the `PAYMENT-SIGNATURE` header.
+- Read the settlement receipt from the `PAYMENT-RESPONSE` header.
+
+Their agent's own x402 client library handles all of this automatically.
+
+## Going live for real money
+
+The defaults are deliberately on a **testnet** — nothing of value moves. When
+you are ready to earn real USDC, follow
+[Going live for real money](README.md#going-live-for-real-money-base-mainnet):
+switch `NETWORK` to `eip155:8453`, move to a production facilitator, and confirm
+`PAY_TO_ADDRESS` is your own wallet.

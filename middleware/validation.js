@@ -1,59 +1,89 @@
 // ============================================================================
-// Request Validation Middleware
-// Validates incoming requests for payment parameters
+// Request Validation & Correlation Middleware
+//
+// NOTE ON x402 v1 vs v2: x402 v2 clients send the payment proof in the
+// `PAYMENT-SIGNATURE` header (the `X-PAYMENT` header from v1 is still accepted
+// for backward compatibility). The old `Authorization: Bearer <proof>` scheme
+// this file previously enforced was x402 v1 folklore and would have rejected
+// every v2 payment, so it is gone.
 // ============================================================================
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('validation-middleware');
 
+/** Request header carrying a v2 payment payload. */
+export const PAYMENT_SIGNATURE_HEADER = 'payment-signature';
+
+/** Legacy (v1) request header carrying a payment payload. */
+export const LEGACY_PAYMENT_HEADER = 'x-payment';
+
 /**
- * Validates payment proof header
- * Ensures required payment information is present
+ * Assign a unique, unguessable request ID for correlation.
+ *
+ * @param {object} req - Express request
+ * @param {object} res - Express response
+ * @param {Function} next - Next middleware
+ * @returns {void}
  */
-export function validatePaymentHeaders(req, res, next) {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader) {
-    logger.debug('Missing authorization header');
-    return res.status(401).json({
-      error: 'Missing authorization header',
-      requestId: req.id,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Extract bearer token
-  const [scheme, token] = authHeader.split(' ');
-  
-  if (scheme?.toLowerCase() !== 'bearer' || !token) {
-    logger.debug('Invalid authorization header format');
-    return res.status(401).json({
-      error: 'Invalid authorization header format. Expected: Bearer <token>',
-      requestId: req.id,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Attach token to request for use in routes
-  req.paymentProof = token;
+export function assignRequestId(req, res, next) {
+  // Honour an inbound correlation ID from an upstream proxy, otherwise mint one.
+  const inbound = String(req.headers['x-request-id'] || '').slice(0, 128);
+  req.id = /^[\w.:-]{8,128}$/.test(inbound) ? inbound : randomUUID();
+  res.setHeader('X-Request-Id', req.id);
   next();
 }
 
 /**
- * Validates request content type
+ * Read the x402 payment payload from either the v2 or the legacy v1 header.
+ *
+ * This is informational only — it never rejects a request. The x402 middleware
+ * is the single authority on whether a payment is present and valid; this
+ * helper exists so logs and handlers can see which header arrived and how big
+ * the payload was.
+ *
+ * @param {object} req - Express request
+ * @param {object} _res - Express response (unused)
+ * @param {Function} next - Next middleware
+ * @returns {void}
+ */
+export function extractPaymentHeader(req, _res, next) {
+  const v2 = req.headers[PAYMENT_SIGNATURE_HEADER];
+  const v1 = req.headers[LEGACY_PAYMENT_HEADER];
+  const header = v2 || v1;
+
+  if (header) {
+    req.x402 = {
+      ...(req.x402 || {}),
+      paymentHeader: header,
+      paymentHeaderVersion: v2 ? 2 : 1,
+      paymentHeaderBytes: header.length,
+    };
+    logger.debug(`Payment header present (x402 v${v2 ? 2 : 1}, ${header.length} bytes) for ${req.method} ${req.path}`);
+  }
+
+  next();
+}
+
+/**
+ * Require a JSON content type on write methods.
+ *
+ * @param {object} req - Express request
+ * @param {object} res - Express response
+ * @param {Function} next - Next middleware
+ * @returns {void}
  */
 export function validateContentType(req, res, next) {
-  if (req.method === 'POST' || req.method === 'PUT') {
-    const contentType = req.headers['content-type'];
-    
-    if (!contentType || !contentType.includes('application/json')) {
-      logger.debug(`Invalid content type: ${contentType}`);
+  if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.includes('application/json')) {
+      logger.debug(`Invalid content type: ${contentType || '(none)'}`);
       return res.status(400).json({
         error: 'Content-Type must be application/json',
         received: contentType || 'none',
         requestId: req.id,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
   }
@@ -61,21 +91,15 @@ export function validateContentType(req, res, next) {
 }
 
 /**
- * Assigns unique request ID for tracking
- */
-export function assignRequestId(req, res, next) {
-  req.id = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  next();
-}
-
-/**
- * Validates query parameters
+ * Reject requests carrying query parameters outside an allowlist.
+ *
+ * @param {string[]} allowedParams - Permitted query parameter names
+ * @returns {(req: object, res: object, next: Function) => void} Middleware
  */
 export function validateQueryParams(allowedParams) {
   return (req, res, next) => {
-    const queryKeys = Object.keys(req.query);
-    const invalidParams = queryKeys.filter(key => !allowedParams.includes(key));
-    
+    const invalidParams = Object.keys(req.query).filter((key) => !allowedParams.includes(key));
+
     if (invalidParams.length > 0) {
       logger.debug(`Invalid query parameters: ${invalidParams.join(', ')}`);
       return res.status(400).json({
@@ -83,9 +107,36 @@ export function validateQueryParams(allowedParams) {
         invalid: invalidParams,
         allowed: allowedParams,
         requestId: req.id,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
     next();
   };
+}
+
+/**
+ * Express 4 error handler for malformed JSON bodies.
+ *
+ * @param {Error} error - The thrown error
+ * @param {object} req - Express request
+ * @param {object} res - Express response
+ * @param {Function} next - Next middleware
+ * @returns {void}
+ */
+export function handleBodyParseErrors(error, req, res, next) {
+  if (error?.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: 'Malformed JSON body',
+      requestId: req.id,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'Request body too large',
+      requestId: req.id,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  return next(error);
 }

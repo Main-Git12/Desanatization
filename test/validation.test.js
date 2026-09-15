@@ -1,138 +1,208 @@
 // ============================================================================
-// Request Validation Tests
+// Middleware Unit Tests
+//
+// Covers the middleware that used to be dead code: it is now wired into the
+// request path, so it needs to be correct.
 // ============================================================================
 
-import { test } from 'node:test';
-import assert from 'node:assert';
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
 import express from 'express';
-import { validatePaymentHeaders, assignRequestId, validateContentType } from '../middleware/validation.js';
+import { createRateLimiter } from '../middleware/rateLimiter.js';
+import { getMetrics, resetMetrics, trackPayment } from '../middleware/monitoring.js';
+import {
+  assignRequestId,
+  extractPaymentHeader,
+  validateContentType,
+  validateQueryParams,
+} from '../middleware/validation.js';
 
-const createTestApp = () => {
+/**
+ * Start an Express app exposing a request echo, so middleware effects are
+ * observable over real HTTP.
+ *
+ * @param {Function[]} middleware - Middleware to mount before the route
+ * @param {Function} [route] - Route handler override
+ * @returns {Promise<{ baseUrl: string, close: () => Promise<void> }>} Server handle
+ */
+async function startApp(middleware, route) {
   const app = express();
   app.use(express.json());
-  app.use(assignRequestId);
-  app.use(validateContentType);
-  
-  app.get('/protected', validatePaymentHeaders, (req, res) => {
-    res.json({ success: true, token: req.paymentProof });
-  });
-  
-  app.post('/data', (req, res) => {
-    res.json({ received: req.body });
-  });
+  for (const mw of middleware) {
+    app.use(mw);
+  }
+  app.all(
+    '/echo',
+    route ??
+      ((req, res) => {
+        res.json({ id: req.id, x402: req.x402 ?? null, query: req.query });
+      }),
+  );
 
-  return app;
-};
-
-test('Validation - Missing authorization header returns 401', async () => {
-  const app = createTestApp();
-  
-  await new Promise((resolve) => {
-    const server = app.listen(3335, async () => {
-      try {
-        const response = await fetch('http://localhost:3335/protected');
-        assert.strictEqual(response.status, 401);
-        
-        const data = await response.json();
-        assert(data.error.includes('authorization header'));
-        
-        console.log('✓ Missing authorization header properly rejected');
-      } finally {
-        server.close(resolve);
-      }
-    });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
-});
+  const { port } = server.address();
 
-test('Validation - Valid authorization header accepted', async () => {
-  const app = createTestApp();
-  
-  await new Promise((resolve) => {
-    const server = app.listen(3336, async () => {
-      try {
-        const response = await fetch('http://localhost:3336/protected', {
-          headers: {
-            'Authorization': 'Bearer valid-payment-proof'
-          }
-        });
-        
-        assert.strictEqual(response.status, 200);
-        const data = await response.json();
-        assert.strictEqual(data.token, 'valid-payment-proof');
-        
-        console.log('✓ Valid authorization header accepted');
-      } finally {
-        server.close(resolve);
-      }
-    });
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeIdleConnections?.();
+      }),
+  };
+}
+
+describe('request id middleware', () => {
+  test('assigns a UUID when no usable inbound id is present', async () => {
+    const server = await startApp([assignRequestId]);
+    try {
+      const response = await fetch(`${server.baseUrl}/echo`);
+      const body = await response.json();
+      assert.match(body.id, /^[0-9a-f-]{36}$/);
+      assert.equal(response.headers.get('x-request-id'), body.id);
+    } finally {
+      await server.close();
+    }
   });
 });
 
-test('Validation - Invalid authorization format returns 401', async () => {
-  const app = createTestApp();
-  
-  await new Promise((resolve) => {
-    const server = app.listen(3337, async () => {
-      try {
-        const response = await fetch('http://localhost:3337/protected', {
-          headers: {
-            'Authorization': 'InvalidFormat token'
-          }
-        });
-        
-        assert.strictEqual(response.status, 401);
-        
-        console.log('✓ Invalid authorization format properly rejected');
-      } finally {
-        server.close(resolve);
-      }
-    });
+describe('payment header middleware', () => {
+  test('reads the v2 PAYMENT-SIGNATURE header', async () => {
+    const server = await startApp([assignRequestId, extractPaymentHeader]);
+    try {
+      const response = await fetch(`${server.baseUrl}/echo`, {
+        headers: { 'PAYMENT-SIGNATURE': 'v2-payload' },
+      });
+      const body = await response.json();
+      assert.equal(body.x402.paymentHeaderVersion, 2);
+      assert.equal(body.x402.paymentHeaderBytes, 10);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('reads the legacy v1 X-PAYMENT header', async () => {
+    const server = await startApp([assignRequestId, extractPaymentHeader]);
+    try {
+      const response = await fetch(`${server.baseUrl}/echo`, { headers: { 'X-PAYMENT': 'v1-payload' } });
+      const body = await response.json();
+      assert.equal(body.x402.paymentHeaderVersion, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('never rejects a request that carries no payment header', async () => {
+    const server = await startApp([assignRequestId, extractPaymentHeader]);
+    try {
+      const response = await fetch(`${server.baseUrl}/echo`);
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).x402, null);
+    } finally {
+      await server.close();
+    }
   });
 });
 
-test('Validation - Request ID is assigned', async () => {
-  const app = createTestApp();
-  
-  await new Promise((resolve) => {
-    const server = app.listen(3338, async () => {
-      try {
-        const response = await fetch('http://localhost:3338/protected');
-        const data = await response.json();
-        
-        assert(data.requestId);
-        assert(data.requestId.startsWith('req-'));
-        
-        console.log('✓ Request ID properly assigned');
-      } finally {
-        server.close(resolve);
-      }
-    });
+describe('content type middleware', () => {
+  test('rejects a non-JSON POST with 400', async () => {
+    const server = await startApp([assignRequestId, validateContentType]);
+    try {
+      const response = await fetch(`${server.baseUrl}/echo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'nope',
+      });
+      assert.equal(response.status, 400);
+      assert.match((await response.json()).error, /application\/json/);
+    } finally {
+      await server.close();
+    }
+  });
+describe('query parameter middleware', () => {
+  test('rejects unknown parameters and lists the allowed ones', async () => {
+    const server = await startApp([assignRequestId, validateQueryParams(['verbose'])]);
+    try {
+      const rejected = await fetch(`${server.baseUrl}/echo?evil=1`);
+      assert.equal(rejected.status, 400);
+      const body = await rejected.json();
+      assert.deepEqual(body.invalid, ['evil']);
+      assert.deepEqual(body.allowed, ['verbose']);
+
+      assert.equal((await fetch(`${server.baseUrl}/echo?verbose=1`)).status, 200);
+    } finally {
+      await server.close();
+    }
   });
 });
 
-test('Validation - Content-Type validation for POST', async () => {
-  const app = createTestApp();
-  
-  await new Promise((resolve) => {
-    const server = app.listen(3339, async () => {
-      try {
-        // Test with invalid content type
-        const response = await fetch('http://localhost:3339/data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'text/plain'
-          },
-          body: 'invalid'
-        });
-        
-        assert.strictEqual(response.status, 400);
-        const data = await response.json();
-        assert(data.error.includes('application/json'));
-        
-        console.log('✓ Content-Type validation working');
-      } finally {
-        server.close(resolve);
+describe('rate limiter middleware', () => {
+  test('throttles over-limit requests and reports the window', async () => {
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2 });
+    const server = await startApp([limiter]);
+    try {
+      const first = await fetch(`${server.baseUrl}/echo`);
+      assert.equal(first.status, 200);
+      assert.equal(first.headers.get('x-ratelimit-limit'), '2');
+      assert.equal(first.headers.get('x-ratelimit-remaining'), '1');
+
+      await fetch(`${server.baseUrl}/echo`);
+
+      const limited = await fetch(`${server.baseUrl}/echo`);
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.headers.get('retry-after')) > 0);
+      assert.equal((await limited.json()).error, 'Too many requests');
+    } finally {
+      await server.close();
+      limiter.dispose();
+    }
+  });
+
+  test('skip() bypasses throttling', async () => {
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 1, skip: () => true });
+    const server = await startApp([limiter]);
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        assert.equal((await fetch(`${server.baseUrl}/echo`)).status, 200);
       }
-    });
+    } finally {
+      await server.close();
+      limiter.dispose();
+    }
+  });
+});
+
+describe('monitoring', () => {
+  test('accumulates settled revenue per asset', () => {
+    resetMetrics();
+    trackPayment({ amount: '1000', asset: '0xaaa', payer: '0x1', network: 'eip155:84532', transaction: '0xtx' });
+    trackPayment({ amount: '2500', asset: '0xaaa' });
+    trackPayment({ amount: '700', asset: '0xbbb' });
+
+    const metrics = getMetrics();
+    assert.equal(metrics.settledPayments, 3);
+    assert.equal(metrics.revenueAtomicByAsset['0xaaa'], '3500');
+    assert.equal(metrics.revenueAtomicByAsset['0xbbb'], '700');
+  });
+
+  test('resetMetrics clears counters', () => {
+    trackPayment({ amount: '5', asset: '0xccc' });
+    resetMetrics();
+    const metrics = getMetrics();
+    assert.equal(metrics.settledPayments, 0);
+    assert.deepEqual(metrics.revenueAtomicByAsset, {});
+    assert.equal(metrics.requestsPerMinute, 0);
+  });
+});
+
+  test('allows a GET without a content type', async () => {
+    const server = await startApp([assignRequestId, validateContentType]);
+    try {
+      assert.equal((await fetch(`${server.baseUrl}/echo`)).status, 200);
+    } finally {
+      await server.close();
+    }
   });
 });

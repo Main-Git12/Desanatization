@@ -1,1 +1,108 @@
-# 💰 Payment Guide - How Agents Pay You\n\n## Overview\n\nYour Desanatization server uses the **x402 protocol** for blockchain-based payments. Agents pay via Ethereum and receive instant access to your protected resources.\n\n## Payment Flow\n\n```\n┌─────────────┐\n│   Agent     │\n└──────┬──────┘\n       │ 1. Request resource\n       ├─────────────────────────────────────┐\n       │                                     │\n       v                                     │\n┌──────────────────┐                        │\n│ x402 Payment     │                        │\n│ Network          │                        │\n│ (Facilitator)    │                        │\n└────────┬─────────┘                        │\n         │ 2. Generate payment proof       │\n         │                                 │\n         └──────────────────┬──────────────┘\n                            │\n                            v\n                  ┌─────────────────┐\n                  │ Your Server     │\n                  │ (Desanatization)│\n                  │                 │\n                  │ Verify payment  │\n                  │ ✅ Valid        │\n                  └────────┬────────┘\n                           │ 3. Return resource\n                           │ 4. Payment → your wallet\n                           v\n                     Agent gets content\n                     You get paid ✨\n```\n\n## Payment Proof Token\n\n### What is it?\nA digitally signed token from x402 network proving the agent:\n- Paid the correct amount\n- Paid to YOUR address\n- Paid on the correct network\n- Has not used the same proof twice\n\n### Format\n```\nAuthorization: Bearer <x402-payment-proof-token>\n```\n\n## Supported Networks\n\n| Network | ID | Currency | Use Case |\n|---------|----|-----------|-----------|\n| Ethereum Mainnet | `eip155:1` | ETH | Real payments, high value |\n| Base Mainnet | `eip155:8453` | ETH | Real payments, low fees |\n| Base Sepolia | `eip155:84532` | ETH (testnet) | **Testing only** |\n| Polygon | `eip155:137` | MATIC | Real payments, low fees |\n\n## Current Configuration\n\n```env\nNETWORK=eip155:84532           # Base Sepolia (testnet)\nPRICE=1000000                  # Amount in Wei (0.001 ETH)\nPAY_TO_ADDRESS=0x742d...       # Your wallet address\n```\n\n### Convert Price to ETH\n\n```javascript\nconst wei = 1000000;\nconst eth = wei / (10 ** 18);\nconsole.log(eth); // 0.000001 ETH\n```\n\n## Agent Payment Process\n\n### Step 1: Agent Initiates Payment\n\n```javascript\n// Agent's code\nimport { x402Client } from '@x402/client';\n\nconst paymentProof = await x402Client.pay({\n  server: 'https://your-domain.com',\n  network: 'eip155:84532',\n  amount: '1000000', // Wei\n});\n```\n\n### Step 2: Agent Uses Payment Proof\n\n```javascript\nconst response = await fetch('https://your-domain.com/api/resource', {\n  headers: {\n    'Authorization': `Bearer ${paymentProof}`\n  }\n});\n\nconst data = await response.json();\nconsole.log(data); // Protected content\n```\n\n### Step 3: Your Server Verifies\n\nYour server automatically:\n1. Extracts payment proof from header\n2. Sends to x402 facilitator for verification\n3. Confirms:\n   - Payment amount matches `PRICE`\n   - Recipient is your `PAY_TO_ADDRESS`\n   - Network matches `NETWORK`\n   - Proof hasn't been replayed\n4. Returns protected resource if valid\n5. Rejects with 402 error if invalid\n\n### Step 4: Settlement\n\nPayments settle to your wallet:\n- **Testnet**: Instant (fake money)\n- **Mainnet**: 12-24 hours (real ETH)\n\n## Testing Payments\n\n### Local Testing (Development)\n\n```bash\n# Start server in dev mode\nNODE_ENV=development npm run dev\n\n# Server runs on localhost:3000\n# Price: 1000000 wei (testnet, free)\n```\n\n### Generate Test Payment Proof\n\nUse x402 testnet CLI:\n\n```bash\n# Install x402 CLI\nnpm install -g @x402/cli\n\n# Generate test proof\nx402 pay \\\n  --server http://localhost:3000 \\\n  --network eip155:84532 \\\n  --amount 1000000\n\n# Returns: test-proof-token-xyz\n```\n\n### Call Your API with Test Proof\n\n```bash\ncurl -H \"Authorization: Bearer test-proof-token-xyz\" \\\n  http://localhost:3000/api/resource\n\n# Response:\n# {\"success\":true,\"data\":\"Protected content!\",\"requestId\":\"req-123\"}\n```\n\n## Production Setup\n\n### 1. Choose Network (Real Money)\n\n**Option A: Base Mainnet** (Recommended - Low fees)\n```env\nNETWORK=eip155:8453\nPRICE=100000000000000  # 0.0001 ETH (~$0.20)\n```\n\n**Option B: Ethereum Mainnet** (Higher fees)\n```env\nNETWORK=eip155:1\nPRICE=1000000000000000  # 0.001 ETH (~$2)\n```\n\n### 2. Deploy with Production Config\n\n```bash\n# In Railway/Heroku/Docker:\nexport NODE_ENV=production\nexport NETWORK=eip155:8453\nexport PRICE=100000000000000\nexport PAY_TO_ADDRESS=0x<your-verified-address>\n```\n\n### 3. Set Real Facilitator\n\n```env\nFACILITATOR_URL=https://facilitator.x402.dev  # Production\n```\n\n## Verify Payments\n\n### Check Metrics\n\n```bash\ncurl https://your-domain.com/metrics\n\n# Response:\n{\n  \"totalRequests\": 150,\n  \"totalPayments\": 8,        # 8 successful payments!\n  \"averageResponseTime\": 234,\n  \"uptime\": 3600,\n  \"errorRate\": \"0%\"\n}\n```\n\n### Check Your Wallet\n\n1. Go to [Etherscan.io](https://etherscan.io) (mainnet) or [BaseScan.org](https://basescan.org) (Base)\n2. Search for your `PAY_TO_ADDRESS`\n3. View incoming transactions\n4. Each = one agent purchase\n\n### Check Server Logs\n\n```bash\nLOG_LEVEL=debug npm run dev\n\n# You'll see:\n# [INFO] Payment verified from 0xAgent123... amount: 1000000\n# [INFO] Protected resource accessed\n```\n\n## Common Issues\n\n### \"Payment Required\" (402 Error)\n\n**Cause**: Invalid or missing payment proof\n\n**Fix**:\n1. Agent needs fresh payment proof\n2. Check `FACILITATOR_URL` is reachable\n3. Verify network matches config\n\n```bash\ncurl -v https://your-domain.com/api/resource\n# Headers should show: 402 Payment Required\n```\n\n### \"Too Many Requests\" (429 Error)\n\n**Cause**: Rate limiting active\n\n**Fix**:\n- Wait 1 minute for general endpoint\n- Wait 15 minutes for payment endpoint\n- Or upgrade rate limits in `middleware/rateLimiter.js`\n\n### Payment Doesn't Appear in Wallet\n\n**Cause**: Settlement delay\n\n**Fix**:\n- Testnet: Should be instant\n- Mainnet: Wait 12-24 hours\n- Check [Etherscan](https://etherscan.io) for pending transactions\n\n### Wrong Amount Charged\n\n**Cause**: `PRICE` misconfigured\n\n**Fix**:\n```env\n# Check current price\nPRICE=1000000  # This is 0.000001 ETH\n\n# To charge 0.001 ETH:\nPRICE=1000000000000000\n\n# Convert: 1 ETH = 10^18 Wei\n```\n\n## Pricing Strategy\n\n### Recommended Prices\n\n| Use Case | Network | Price | USD (~) |\n|----------|---------|-------|----------|\n| Hobby/Testing | Base Sepolia | 1M wei | $0 (fake) |\n| Low-value API | Base Mainnet | 100M wei | $0.20 |\n| Standard API | Base Mainnet | 1B wei | $2 |\n| Premium API | Ethereum | 0.01 ETH | $20 |\n| Enterprise | Ethereum | 0.1 ETH | $200 |\n\n## Scaling Payments\n\n### Single Server\n```\nRequests/min: ~1,000\nPayments/min: ~100\nRPS: Fine for most use cases\n```\n\n### High Volume (1000+ payments/day)\n\n1. **Load Balancer**: Distribute across servers\n2. **Redis**: Cache payment verification\n3. **Database**: Track payments permanently\n4. **Monitoring**: Alert on failed payments\n\nSee `DEPLOYMENT.md` for scaling guide.\n\n## Security\n\n✅ **Verified by x402 network** - Can't forge payments  \n✅ **One-time use only** - Proof tokens expire  \n✅ **HTTPS required** - No plaintext transmission  \n✅ **Rate limited** - Prevents brute force  \n✅ **Amount verified** - Can't overpay or underpay  \n\n## Support\n\n- **x402 Docs**: [x402.dev](https://x402.dev)\n- **x402 Testnet Faucet**: Get free test ETH\n- **Server Logs**: `LOG_LEVEL=debug` for details\n- **Payment Proof Debug**: Check JWT payload\n\n---\n\n**You're ready to receive payments! 💰**\n"
+# 💰 Payment Guide — how agents pay you
+
+This server implements **x402 v2**. Buyers pay in **USDC**; payments are verified
+and settled by a **facilitator**, so the server itself holds no keys and never
+signs a transaction.
+
+## The flow
+
+```
+┌──────────┐  1. GET /api/resource                 ┌─────────────────────┐
+│  Agent   │ ────────────────────────────────────► │  Desanatization     │
+│ (buyer)  │ ◄──────────────────────────────────── │  (this server)      │
+└────┬─────┘  2. 402 + PAYMENT-REQUIRED header     └──────────┬──────────┘
+     │                                                        │
+     │ 3. Signs an EIP-3009 authorisation for USDC            │
+     │                                                        │
+     ├──── 4. GET + PAYMENT-SIGNATURE header ────────────────►│
+     │                                      5. verify ────────┤
+     │                                      6. settle ────────┤──► Facilitator
+     │                                                        │    (on-chain)
+     ◄──── 7. 200 + PAYMENT-RESPONSE receipt ─────────────────┘
+                                          USDC → your wallet
+```
+
+## What the buyer sees in the 402
+
+The authoritative copy is the base64 JSON in the `PAYMENT-REQUIRED` header; the
+JSON body mirrors it for convenience.
+
+```json
+{
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:84532",
+      "amount": "1000",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "payTo": "0xYourWallet…",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USDC", "version": "2" }
+    }
+  ]
+}
+```
+
+- `amount` is in the token's smallest unit. USDC has 6 decimals, so `1000` is
+  `$0.001` and `50000` is `$0.05`.
+- `asset` is the USDC contract for the configured network.
+- `payTo` is your wallet — this is why an incorrect `PAY_TO_ADDRESS` means you
+  get nothing.
+
+## Headers
+
+| Direction | Header | Meaning |
+| --- | --- | --- |
+| Request | `PAYMENT-SIGNATURE` | The buyer's signed payment payload (v1 `X-PAYMENT` also accepted) |
+| Response (402) | `PAYMENT-REQUIRED` | Payment requirements |
+| Response (200) | `PAYMENT-RESPONSE` | Settlement receipt: transaction hash, payer, amount, network |
+
+If your reverse proxy strips response headers, buyers keep paying but lose their
+receipt — keep `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE` intact.
+
+## Networks
+
+| Network | CAIP-2 | Real money? | Facilitator |
+| --- | --- | --- | --- |
+| Base Sepolia | `eip155:84532` | No (testnet) | `https://x402.org/facilitator` (no key) |
+| Base | `eip155:8453` | **Yes** | A production facilitator (Coinbase CDP, PayAI, self-hosted…) |
+
+The server refuses to pretend: if you pair a mainnet network with the public
+testnet facilitator it warns loudly at boot, because that combination cannot
+settle anything.
+
+## Supported payment schemes
+
+This server configures the `exact` scheme — a fixed price known before the
+response is generated, which is what most paid API calls want. x402 also
+supports `upto` (usage-based, authorise a maximum then charge actual usage) and
+`batch-settlement` (micropayments with batched redemption); enabling those means
+registering the matching scheme for the same network in `x402.js`.
+
+## Confirming you actually got paid
+
+Three independent checks:
+
+1. **Server metrics** — `GET /api/metrics`:
+   - `settledPayments` — number of successfully settled payments
+   - `revenueAtomicByAsset` — settled amount per token contract (atomic units)
+   - `failedPayments` / `paymentFailureReasons` — attempted-but-rejected payments
+2. **Settlement receipt** — the `PAYMENT-RESPONSE` header on the buyer's `200`
+   contains the on-chain transaction hash.
+3. **The chain** — search that transaction hash on a Base block explorer and
+   confirm the USDC transfer arrived at your address.
+
+## Pricing advice
+
+`PRICE` accepts a dollar string (`$0.001`) which resolves to the network's
+default stablecoin, or an explicit token:
+
+```bash
+PRICE=$0.05
+PRICE={"asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","amount":"50000"}
+```
+
+Remember that a facilitator and the network charge fees on settlement; a price
+far below a cent can end up mostly fees. Start around `$0.01`–`$0.05` for real
+traffic and tune from the `settledPayments` counter.

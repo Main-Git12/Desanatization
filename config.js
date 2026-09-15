@@ -1,24 +1,325 @@
-export function loadConfig() {
-  const payToAddress = process.env.PAY_TO_ADDRESS;
-  if (!payToAddress) {
-    throw new Error('Missing required environment variables: PAY_TO_ADDRESS');
+// ============================================================================
+// Configuration Loader
+//
+// Reads, validates and normalises all environment variables in one place.
+// Every problem found is reported together (not just the first) so a bad
+// Railway deploy can be fixed in a single pass.
+// ============================================================================
+
+/** Public x402 testnet facilitator. Works with eip155:84532 out of the box. */
+export const DEFAULT_FACILITATOR_URL = 'https://x402.org/facilitator';
+
+/** EIP-55-agnostic EVM address check. */
+const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+
+/** CAIP-2 network identifier, e.g. `eip155:8453`. */
+const CAIP2_PATTERN = /^[a-z0-9-]+:[a-zA-Z0-9-]+$/;
+
+/** Dollar-string price, e.g. `$0.001`. */
+const DOLLAR_PRICE_PATTERN = /^\$\d+(\.\d+)?$/;
+
+/**
+ * Legacy x402 v1 network names mapped to CAIP-2 identifiers.
+ * v2 requires CAIP-2; accepting the aliases avoids silent misconfiguration.
+ */
+const LEGACY_NETWORK_ALIASES = {
+  base: 'eip155:8453',
+  'base-mainnet': 'eip155:8453',
+  'base-sepolia': 'eip155:84532',
+  'base-goerli': 'eip155:84531',
+  ethereum: 'eip155:1',
+  mainnet: 'eip155:1',
+  sepolia: 'eip155:11155111',
+  polygon: 'eip155:137',
+  'polygon-amoy': 'eip155:80002',
+};
+
+/** Networks that move real value; the public testnet facilitator cannot serve them. */
+export const MAINNET_NETWORKS = new Set(['eip155:1', 'eip155:8453', 'eip155:137', 'eip155:43114']);
+
+/**
+ * Thrown when configuration is invalid. Carries every problem discovered.
+ */
+export class ConfigError extends Error {
+  /**
+   * @param {string[]} problems - Human readable list of configuration problems
+   */
+  constructor(problems) {
+    super(`Invalid configuration:\n  - ${problems.join('\n  - ')}`);
+    this.name = 'ConfigError';
+    this.problems = problems;
+  }
+}
+
+/**
+ * Parse an integer environment variable.
+ *
+ * @param {string|undefined} raw - Raw environment value
+ * @param {string} name - Variable name (for error messages)
+ * @param {{ min?: number, max?: number }} bounds - Inclusive bounds
+ * @param {string[]} problems - Collector for validation errors
+ * @param {number} fallback - Value used when the variable is unset
+ * @returns {number} Parsed value
+ */
+function readInt(raw, name, bounds, problems, fallback) {
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    problems.push(`${name} must be an integer (received "${raw}")`);
+    return fallback;
+  }
+  if (bounds?.min !== undefined && value < bounds.min) {
+    problems.push(`${name} must be >= ${bounds.min} (received ${value})`);
+    return fallback;
+  }
+  if (bounds?.max !== undefined && value > bounds.max) {
+    problems.push(`${name} must be <= ${bounds.max} (received ${value})`);
+    return fallback;
+  }
+  return value;
+}
+
+/**
+ * Parse a boolean environment variable.
+ *
+ * @param {string|undefined} raw - Raw environment value
+ * @param {string} name - Variable name (for error messages)
+ * @param {string[]} problems - Collector for validation errors
+ * @param {boolean} fallback - Value used when the variable is unset
+ * @returns {boolean} Parsed value
+ */
+function readBool(raw, name, problems, fallback) {
+  if (raw === undefined || raw === '') return fallback;
+  const normalised = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalised)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalised)) return false;
+  problems.push(`${name} must be a boolean like true/false (received "${raw}")`);
+  return fallback;
+}
+
+/**
+ * Normalise a network identifier to CAIP-2, translating legacy v1 aliases.
+ *
+ * @param {string} raw - Raw network identifier
+ * @param {string[]} problems - Collector for validation errors
+ * @param {string[]} warnings - Collector for non-fatal warnings
+ * @returns {string|undefined} CAIP-2 identifier when valid
+ */
+export function normaliseNetwork(raw, problems = [], warnings = []) {
+  const value = String(raw || '').trim();
+  if (!value) return undefined;
+
+  const alias = LEGACY_NETWORK_ALIASES[value.toLowerCase()];
+  if (alias) {
+    warnings.push(`NETWORK="${value}" is a legacy x402 v1 name; using CAIP-2 "${alias}" instead.`);
+    return alias;
   }
 
-  return {
-    port: process.env.PORT || 3000,
-    price: '$0.001',
-    network: 'base-sepolia',
-    payToAddress: payToAddress,
-    schemes: [],
-    paywall: {
-      payTo: payToAddress,
-      routes: {
-        '/api/resource': {
-          price: '$0.001',
-          network: 'base-sepolia',
-          extensions: {},
-        },
-      },
+  if (!CAIP2_PATTERN.test(value)) {
+    problems.push(
+      `NETWORK must be a CAIP-2 identifier such as "eip155:84532" (received "${value}")`,
+    );
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Validate a price value. Accepts a dollar string (`$0.001`) or an explicit
+ * asset amount object (JSON) for non-default tokens.
+ *
+ * @param {string} raw - Raw PRICE value
+ * @param {string[]} problems - Collector for validation errors
+ * @returns {string|{asset: string, amount: string}} Valid price
+ */
+export function normalisePrice(raw, problems = []) {
+  const value = String(raw ?? '').trim();
+  if (!value) return '$0.001';
+
+  if (DOLLAR_PRICE_PATTERN.test(value)) return value;
+
+  if (value.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed?.asset === 'string' && typeof parsed?.amount === 'string') {
+        return parsed;
+      }
+      problems.push('PRICE object form requires string fields "asset" and "amount"');
+    } catch (error) {
+      problems.push(`PRICE is not valid JSON: ${error.message}`);
+    }
+    return '$0.001';
+  }
+
+  problems.push(
+    'PRICE must be a dollar string such as "$0.001", or JSON {"asset":"0x…","amount":"1000"} ' +
+      `(received "${value}")`,
+  );
+  return '$0.001';
+}
+
+/**
+ * Parse ALLOWED_ORIGINS into a list. `*` means "reflect any origin".
+ *
+ * @param {string|undefined} raw - Comma separated origin list
+ * @returns {string[]} Normalised origin list
+ */
+export function parseAllowedOrigins(raw) {
+  return String(raw ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Load and validate configuration.
+ *
+ * @param {Record<string, string|undefined>} [env] - Environment source (defaults to process.env)
+ * @returns {Readonly<object>} Frozen, validated configuration
+ * @throws {ConfigError} When one or more variables are invalid
+ */
+export function loadConfig(env = process.env) {
+  /** @type {string[]} */
+  const problems = [];
+  /** @type {string[]} */
+  const warnings = [];
+
+  const nodeEnv = env.NODE_ENV || 'development';
+  const isProduction = nodeEnv === 'production';
+
+  // --- Required -----------------------------------------------------------
+  const payToAddress = String(env.PAY_TO_ADDRESS || '').trim();
+  if (!payToAddress) {
+    problems.push('PAY_TO_ADDRESS is required — set it to your EVM wallet address (0x…)');
+  } else if (!EVM_ADDRESS_PATTERN.test(payToAddress)) {
+    problems.push(
+      `PAY_TO_ADDRESS must be a 42-character EVM address starting with 0x (received "${payToAddress}")`,
+    );
+  }
+
+  // --- Network ------------------------------------------------------------
+  const network = normaliseNetwork(env.NETWORK || 'eip155:84532', problems, warnings);
+
+  // --- Facilitator --------------------------------------------------------
+  const facilitatorUrl = String(env.FACILITATOR_URL || DEFAULT_FACILITATOR_URL).trim();
+  try {
+    const parsed = new URL(facilitatorUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      problems.push(`FACILITATOR_URL must use http or https (received "${facilitatorUrl}")`);
+    }
+    if (parsed.hostname === 'localhost' && isProduction) {
+      problems.push('FACILITATOR_URL points at localhost, which cannot work in production.');
+    }
+  } catch {
+    problems.push(`FACILITATOR_URL is not a valid URL (received "${facilitatorUrl}")`);
+  }
+
+  // Warn for any environment: pointing a real-value network at the public
+  // testnet facilitator is the single most likely reason for earning nothing.
+  if (facilitatorUrl.includes('x402.org') && network && MAINNET_NETWORKS.has(network)) {
+    warnings.push(
+      `FACILITATOR_URL is the public testnet facilitator (x402.org) but NETWORK=${network} is a mainnet. ` +
+        'Use a production facilitator (e.g. Coinbase CDP, PayAI) to accept real payments.',
+    );
+  }
+
+  const price = normalisePrice(env.PRICE, problems);
+
+  const config = {
+    nodeEnv,
+    isProduction,
+    port: readInt(env.PORT, 'PORT', { min: 1, max: 65535 }, problems, 3000),
+    host: env.HOST || '0.0.0.0',
+    logLevel: env.LOG_LEVEL || 'info',
+    trustProxy:
+      env.TRUST_PROXY === undefined ? 1 : readBool(env.TRUST_PROXY, 'TRUST_PROXY', problems, true),
+    allowedOrigins: parseAllowedOrigins(env.ALLOWED_ORIGINS),
+
+    facilitator: {
+      url: facilitatorUrl,
+      timeoutMs: readInt(
+        env.FACILITATOR_TIMEOUT_MS,
+        'FACILITATOR_TIMEOUT_MS',
+        { min: 1000, max: 120000 },
+        problems,
+        20000,
+      ),
+      // Sent as `Authorization` on verify/settle/supported/bazaar calls.
+      // Required by some production facilitators (e.g. Coinbase CDP).
+      authHeader: String(env.FACILITATOR_AUTH_HEADER || '').trim() || undefined,
     },
+
+    network,
+    price,
+    payToAddress,
+    scheme: 'exact',
+
+    resource: {
+      path: env.RESOURCE_PATH || '/api/resource',
+      description: env.RESOURCE_DESCRIPTION || 'Protected API Resource',
+      mimeType: env.RESOURCE_MIME_TYPE || 'application/json',
+      serviceName: env.SERVICE_NAME || 'Desanatization',
+    },
+
+    // How long a signed payment authorisation stays valid, in seconds.
+    maxTimeoutSeconds: readInt(
+      env.PAYMENT_TIMEOUT_SECONDS,
+      'PAYMENT_TIMEOUT_SECONDS',
+      { min: 10, max: 86400 },
+      problems,
+      300,
+    ),
+
+    syncFacilitatorOnStart: readBool(
+      env.SYNC_FACILITATOR_ON_START,
+      'SYNC_FACILITATOR_ON_START',
+      problems,
+      true,
+    ),
+
+    // When true, the process exits if the facilitator cannot be reached at boot
+    // (fail the deploy loudly instead of serving traffic that can never be paid).
+    strictStartup: readBool(env.STRICT_STARTUP, 'STRICT_STARTUP', problems, isProduction),
+
+    // Optional bearer token protecting the /metrics endpoint.
+    metricsToken: String(env.METRICS_TOKEN || '').trim() || undefined,
+
+    rateLimit: {
+      windowMs: readInt(env.RATE_LIMIT_WINDOW_MS, 'RATE_LIMIT_WINDOW_MS', { min: 1000 }, problems, 60_000),
+      maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 'RATE_LIMIT_MAX_REQUESTS', { min: 1 }, problems, 60),
+    },
+  };
+
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+
+  config.warnings = Object.freeze(warnings);
+  return Object.freeze(config);
+}
+
+/**
+ * Build a loggable / servable summary of the effective configuration.
+ * Never includes secrets (facilitator auth header, metrics token).
+ *
+ * @param {ReturnType<typeof loadConfig>} config - Loaded configuration
+ * @returns {object} Redacted summary
+ */
+export function describeConfig(config) {
+  return {
+    environment: config.nodeEnv,
+    network: config.network,
+    price: config.price,
+    payTo: config.payToAddress,
+    scheme: config.scheme,
+    resourcePath: config.resource.path,
+    facilitator: {
+      url: config.facilitator.url,
+      timeoutMs: config.facilitator.timeoutMs,
+      authenticated: Boolean(config.facilitator.authHeader),
+    },
+    allowedOrigins: config.allowedOrigins.length > 0 ? config.allowedOrigins : ['<none>'],
+    strictStartup: config.strictStartup,
+    syncFacilitatorOnStart: config.syncFacilitatorOnStart,
   };
 }
