@@ -8,6 +8,7 @@
 import express from 'express';
 import { describeConfig } from './config.js';
 import { createGrowthEngine } from './growth.js';
+import { createTaskAgent } from './agent.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import {
   getInsights,
@@ -70,14 +71,28 @@ export function createApp({ config, logger, x402 }) {
   const app = express();
 
   // Outbound growth engine (opt-in): discovers and pitches peer agents, then
-  // learns which channels work. Exposed read-only at /api/growth.
+  // learns which channels work. Exposed read-only at /api/growth. The engine
+  // reads live conversion/market context every cycle so its effort adapts to
+  // the environment instead of blindly repeating.
   const growthEngine = createGrowthEngine({
     config,
     logger,
     selfBaseUrl: config.growth?.publicUrl ?? `http://localhost:${config.port}`,
     intervalMs: config.growth?.intervalMs,
     maxPerCycle: config.growth?.maxPerCycle,
+    getContext: () => {
+      const insights = getInsights();
+      return {
+        trialToPaidRate: insights.conversion?.trialToPaidRate ?? 0,
+        freeTrials: insights.funnel?.freeTrial ?? 0,
+        inboundPitches: insights.funnel?.inboundPitch ?? 0,
+      };
+    },
   });
+
+  // Task agent: bounded autonomous goal pursuit with a learned skill library.
+  // Exposed (token-guarded) at /api/agent/task and /api/agent/skills.
+  const taskAgent = createTaskAgent({ logger });
 
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
@@ -141,6 +156,8 @@ export function createApp({ config, logger, x402 }) {
         skill: 'GET /skill.md',
         insights: 'GET /api/insights',
         growth: 'GET /api/growth',
+        agentTask: 'POST /api/agent/task',
+        agentSkills: 'GET /api/agent/skills',
       },
       endpoints: {
         discovery: 'GET /',
@@ -195,7 +212,37 @@ export function createApp({ config, logger, x402 }) {
   // Outbound engine learning report: which peers were pitched, which channels
   // scored highest. Same guard — it reveals our prospect list.
   app.get('/api/growth', requireMetricsToken(config), (req, res) => {
-    res.json({ ...growthEngine.getStats(), paywallReady: x402.isReady(), timestamp: new Date().toISOString() });
+    res.json({
+      ...growthEngine.getStats(),
+      pricingAdvice: growthEngine.getPricingAdvice(),
+      paywallReady: x402.isReady(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Task agent: send it a goal, it plans -> acts -> observes -> learns. The
+  // full trace comes back so every autonomous decision is auditable. A
+  // repeated goal replays the learned skill; drift degrades and re-plans.
+  app.post('/api/agent/task', requireMetricsToken(config), async (req, res) => {
+    const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
+    if (!goal) {
+      return res.status(400).json({
+        error: 'Send {"goal": "..."} — e.g. {"goal": "discover https://peer.example"} or {"goal": "sanitize: Mail jane@example.com"}.',
+        requestId: req.id,
+      });
+    }
+    if (goal.length > 2000) {
+      return res.status(400).json({ error: 'goal must be 2000 characters or fewer', requestId: req.id });
+    }
+    const outcome = await taskAgent.runTask({ goal, maxSteps: Number(req.body?.maxSteps) || undefined });
+    trackFunnel(outcome.ok ? 'agentTaskOk' : 'agentTask');
+    const status = outcome.ok ? 200 : 502;
+    return res.status(status).json({ ...outcome, timestamp: new Date().toISOString() });
+  });
+
+  // The agent's growth ledger: skills learned, replays, repairs, degradations.
+  app.get('/api/agent/skills', requireMetricsToken(config), (req, res) => {
+    res.json({ ...taskAgent.getSkills(), timestamp: new Date().toISOString() });
   });
 
   // Inbound outreach: peers pitch us back at the same surface our engine

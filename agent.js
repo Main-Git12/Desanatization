@@ -1,0 +1,295 @@
+// ============================================================================
+// Task Agent — bounded plan -> act -> observe -> learn loop
+//
+// "Send it to complete a task" is made real and honest by three constraints:
+//   1. SAFE TOOL SET — http_fetch (GET only, 10s timeout), x402_discover
+//      (peer fingerprinting), text_sanitize (our own product skill). No
+//      shell, no filesystem, no keys, no ability to move money.
+//   2. BOUNDED AUTONOMY — hard step budget (default 8, cap 16); a task that
+//      exhausts its budget fails with its full trace instead of wandering.
+//   3. LEARNED SKILLS — every success is recorded as a replayable plan. New
+//      tasks replay a matching skill first; if the environment changed and
+//      the replay no longer holds, the agent detects the drift, marks the
+//      skill degraded, and re-plans from observation. That is the
+//      "adapts to context and environment" mechanism.
+// ============================================================================
+
+import { sanitizeText } from './sanitize.js';
+
+export const MAX_STEPS_CAP = 16;
+
+/**
+ * Fetch with a timeout, never throwing (GET only — the agent never sends
+ * writes on its own initiative).
+ *
+ * @param {string} url - Absolute URL
+ * @returns {Promise<{status: number, body: string, ok: boolean}>}
+ */
+async function getSafe(url) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    return { status: response.status, body: (await response.text()).slice(0, 4000), ok: response.ok };
+  } catch (error) {
+    return { status: 0, body: String(error?.message ?? error), ok: false };
+  }
+}
+
+/** @type {Map<string, (args: object) => Promise<object>>} */
+export const TOOLS = new Map([
+  [
+    'http_fetch',
+    async ({ url }) => {
+      if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return { error: 'http_fetch needs an http(s) url' };
+      const out = await getSafe(url);
+      return { tool: 'http_fetch', url, status: out.status, ok: out.ok, excerpt: out.body.slice(0, 500) };
+    },
+  ],
+  [
+    'x402_discover',
+    async ({ url }) => {
+      if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
+        return { error: 'x402_discover needs an http(s) url' };
+      }
+      const root = await getSafe(url);
+      const llms = await getSafe(`${url.replace(/\/+$/, '')}/llms.txt`);
+      const isX402 = root.status === 402 || root.body.includes('x402') || llms.ok;
+      return {
+        tool: 'x402_discover',
+        url,
+        isX402Peer: isX402,
+        signals: { status402: root.status === 402, bodyMentionsX402: root.body.includes('x402'), llmsTxt: llms.ok },
+      };
+    },
+  ],
+  [
+    'text_sanitize',
+    async ({ text }) => {
+      if (typeof text !== 'string' || text.length === 0 || text.length > 20_000) {
+        return { error: 'text_sanitize needs 1..20000 chars of text' };
+      }
+      const result = sanitizeText(text);
+      return { tool: 'text_sanitize', clean: result.clean, redactions: result.redactions ?? null, ok: true };
+    },
+  ],
+]);
+
+/**
+ * Choose the next step from the goal and everything observed so far. The
+ * policy is deliberately inspectable: goal shape -> tool, observation ->
+ * refinement.
+ *
+ * @param {string} goal - What the agent must accomplish
+ * @param {Array<object>} trace - Steps taken so far
+ * @returns {{tool: string, args: object}|null} Next step, or null when done/stuck
+ */
+export function planNextStep(goal, trace) {
+  const urlMatch = goal.match(/https?:\/\/[^\s]+/);
+  const textPayload = goal.match(/sanitize:\s*([\s\S]+)/);
+
+  if (/sanitize/i.test(goal) && textPayload) {
+    if (trace.length === 0) return { tool: 'text_sanitize', args: { text: textPayload[1] } };
+    return null; // sanitize finishes in one deterministic step
+  }
+
+  if (urlMatch) {
+    const url = urlMatch[0].replace(/[).,]+$/, '');
+    if (trace.length === 0) return { tool: 'x402_discover', args: { url } };
+    const discovery = trace[0]?.result;
+    if (trace.length === 1 && discovery?.tool === 'x402_discover' && discovery.isX402Peer) {
+      // Adapt to context: a confirmed x402 peer gets a docs fetch to learn
+      // its interface — we walk away with actionable knowledge of the peer.
+      return { tool: 'http_fetch', args: { url: `${url.replace(/\/+$/, '')}/llms.txt` } };
+    }
+    if (trace.length === 1) return { tool: 'http_fetch', args: { url } };
+    return null;
+  }
+
+  if (trace.length === 0) return { tool: 'text_sanitize', args: { text: goal } };
+  return null;
+}
+
+/**
+ * A step succeeded when its result says the goal advanced — per-tool
+ * predicates keep "done" honest instead of optimistic.
+ *
+ * @param {object} result - Tool result
+ * @returns {boolean} Whether this result accomplishes the goal
+ */
+export function isStepSuccessful(result) {
+  if (!result || result.error) return false;
+  if (result.tool === 'text_sanitize') return result.ok === true;
+  if (result.tool === 'x402_discover') return typeof result.isX402Peer === 'boolean';
+  if (result.tool === 'http_fetch') return result.ok === true;
+  return false;
+}
+
+/**
+ * Create the task agent.
+ *
+ * @param {object} options
+ * @param {object} options.logger - Pino-style logger
+ * @param {number} [options.defaultMaxSteps=8] - Default step budget
+ * @returns {{ runTask: (task: object) => Promise<object>, getSkills: () => object, listSkills: () => Array<object> }}
+ */
+/**
+ * Normalise a goal into a stable skill key: action verb + target host when the
+ * goal names one, else a slug of the goal text. Keeps the skill library small
+ * and replayable across phrasings of the same task.
+ *
+ * @param {string} goal - Raw goal text
+ * @returns {string} Stable skill key (e.g. "agent:discover:example.com")
+ */
+function goalKey(goal) {
+  const match = /([a-z]+)\s+(https?:\/\/[^/\s]+)/i.exec(goal);
+  if (match) {
+    let host = '';
+    try {
+      host = new URL(match[2]).host;
+    } catch {
+      host = match[2].replace(/^https?:\/\//, '').slice(0, 40);
+    }
+    return `agent:${match[1].toLowerCase()}:${host}`;
+  }
+  return `agent:goal:${goal.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48)}`;
+}
+
+export function createTaskAgent({ logger, defaultMaxSteps = 8 }) {
+  /** @type {Map<string, object>} goalKey -> learned skill */
+  const skills = new Map();
+  let tasksRun = 0;
+  let tasksSucceeded = 0;
+  let skillReplays = 0;
+  let skillReplaysSucceeded = 0;
+
+  /**
+   * Execute one planned step, catching tool explosions into a failed result.
+   *
+   * @param {{tool: string, args: object}} step - Planned step
+   * @returns {Promise<object>} Tool result
+   */
+  async function executeStep(step) {
+    const tool = TOOLS.get(step.tool);
+    if (!tool) return { error: `unknown tool: ${step.tool}` };
+    try {
+      return await tool(step.args ?? {});
+    } catch (error) {
+      return { error: `tool ${step.tool} threw: ${String(error?.message ?? error).slice(0, 200)}` };
+    }
+  }
+
+  /**
+   * Run a plan (fresh or replayed) to completion under the step budget.
+   *
+   * @param {string} goal - The task goal
+   * @param {Array<{tool: string, args: object}>} [plan] - Replay plan when present
+   * @param {number} maxSteps - Step budget
+   * @returns {Promise<{trace: Array<object>, completed: boolean}>} Execution trace
+   */
+  async function execute(goal, plan, maxSteps) {
+    const trace = [];
+    for (let i = 0; i < maxSteps; i += 1) {
+      let step;
+      if (plan && i < plan.length) {
+        step = plan[i]; // replay: trust the learned plan verbatim first
+      } else {
+        step = planNextStep(goal, trace);
+      }
+      if (!step) break;
+      const result = await executeStep(step);
+      trace.push({ step: i + 1, tool: step.tool, args: step.args, result });
+      if (!isStepSuccessful(result)) {
+        return { trace, completed: false, failedAt: i + 1 };
+      }
+    }
+    return { trace, completed: trace.length > 0 };
+  }
+
+  /**
+   * Run a task: replay a learned skill when one matches, detect environment
+   * drift when the replay fails, re-plan from observation, and record every
+   * success as a new/reinforced skill.
+   *
+   * @param {object} task - { goal: string, maxSteps?: number }
+   * @returns {Promise<object>} { ok, goal, outcome, steps, via, trace }
+   */
+  async function runTask(task) {
+    const goal = typeof task?.goal === 'string' ? task.goal.trim() : '';
+    if (!goal) return { ok: false, error: 'task.goal is required' };
+    const maxSteps = Math.min(MAX_STEPS_CAP, Math.max(1, Number(task?.maxSteps) || defaultMaxSteps));
+    tasksRun += 1;
+    const key = goalKey(goal);
+    const skill = skills.get(key);
+
+    if (skill && !skill.degraded) {
+      skillReplays += 1;
+      const replay = await execute(goal, skill.plan, maxSteps);
+      if (replay.completed) {
+        skillReplaysSucceeded += 1;
+        tasksSucceeded += 1; // a replayed success is still a succeeded task
+        skill.uses += 1;
+        skill.lastUsedAt = new Date().toISOString();
+        return { ok: true, goal, via: 'skill-replay', steps: replay.trace.length, trace: replay.trace };
+      }
+      // Environment drifted: the remembered plan no longer holds. Mark it,
+      // fall through to fresh planning, and let observation rebuild the skill.
+      skill.degraded = true;
+      skill.degradedAt = new Date().toISOString();
+      logger.warn(`Agent: skill for "${key.slice(0, 60)}" failed on replay — re-planning from observation.`);
+    }
+
+    const fresh = await execute(goal, null, maxSteps);
+    if (fresh.completed) {
+      tasksSucceeded += 1;
+      const existing = skills.get(key);
+      if (existing) {
+        existing.plan = fresh.trace.map((t) => ({ tool: t.tool, args: t.args }));
+        existing.uses += 1;
+        existing.degraded = false;
+        existing.repairedAt = new Date().toISOString();
+      } else {
+        skills.set(key, {
+          goalKey: key,
+          plan: fresh.trace.map((t) => ({ tool: t.tool, args: t.args })),
+          recordedAt: new Date().toISOString(),
+          uses: 0,
+        });
+      }
+      return { ok: true, goal, via: existing ? 'skill-repaired' : 'skill-learned', steps: fresh.trace.length, trace: fresh.trace };
+    }
+
+    return {
+      ok: false,
+      goal,
+      via: skill ? 'skill-drift-then-failed' : 'failed',
+      steps: fresh.trace.length,
+      trace: fresh.trace,
+      note: 'budget exhausted or environment unreachable — full trace returned',
+    };
+  }
+
+  /**
+   * Skill library report — the agent's growth ledger.
+   *
+   * @returns {object} Counters + per-skill health
+   */
+  function getSkills() {
+    return {
+      tasksRun,
+      tasksSucceeded,
+      skillReplays,
+      skillReplaysSucceeded,
+      skills: [...skills.values()].map((s) => ({
+        goal: s.goalKey,
+        recordedAt: s.recordedAt,
+        uses: s.uses,
+        planLength: s.plan.length,
+        degraded: Boolean(s.degraded),
+        repaired: Boolean(s.repairedAt),
+      })),
+    };
+  }
+
+  return { runTask, getSkills, listSkills: () => [...skills.values()] };
+}
+
+

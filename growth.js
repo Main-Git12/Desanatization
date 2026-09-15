@@ -93,13 +93,13 @@ export function mergeDiscovered(existing, feed) {
 }
 
 /**
- * Fetch with a timeout, never throwing.
+ * Fetch with a timeout, never throwing. Shared with the task agent.
  *
  * @param {string} url - Absolute URL
  * @param {RequestInit} [init] - Optional fetch init
  * @returns {Promise<{status: number, headers: Headers, body: string, ok: boolean}>}
  */
-async function fetchSafe(url, init = {}) {
+export async function fetchSafe(url, init = {}) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000), ...init });
     return {
@@ -122,8 +122,8 @@ async function fetchSafe(url, init = {}) {
  * @param {string} selfBaseUrl - Our public base URL
  * @returns {object} Pitch document
  */
-export function buildPitch(config, selfBaseUrl) {
-  return {
+export function buildPitch(config, selfBaseUrl, market) {
+  const pitch = {
     type: 'x402-service-pitch',
     from: selfBaseUrl,
     service: {
@@ -141,6 +141,15 @@ export function buildPitch(config, selfBaseUrl) {
       'Deterministic PII sanitization for your agent traffic — free trial, $0.001 per full job, ' +
       'batch pricing available. Resell freely with your own ?ref= tag and appear on our leaderboard.',
   };
+  // Context adaptation: when several peers are actively pitching us, lead
+  // with what separates us instead of the generic line.
+  if (market?.pitches >= 3) {
+    pitch.differentiation =
+      `Active market: ${market.pitches} services pitched us` +
+      (market.min ? `, price floor observed $${market.min}` : '') +
+      '. We differ: deterministic output, public /receipts, referral revenue share.';
+  }
+  return pitch;
 }
 
 /**
@@ -157,6 +166,12 @@ export async function probeAndPitch(target, pitch) {
   if (!root.ok && root.status !== 402) {
     updated.lastResult = `unreachable:${root.status}`;
     updated.score = Math.max(0, target.score - 0.5);
+    // Environment adaptation: exponential backoff instead of retrying a dead
+    // peer every cycle. Backoff caps at one hour.
+    updated.failures = (target.failures ?? 0) + 1;
+    updated.nextAttemptAt = new Date(
+      Date.now() + Math.min(3_600_000, 60_000 * 2 ** updated.failures),
+    ).toISOString();
     return updated;
   }
 
@@ -182,6 +197,8 @@ export async function probeAndPitch(target, pitch) {
   }
 
   updated.responses = target.responses + (root.ok ? 1 : 0);
+  updated.failures = 0;
+  updated.nextAttemptAt = undefined;
   updated.lastResult = pitched
     ? 'pitched'
     : isX402Peer
@@ -206,13 +223,22 @@ export async function probeAndPitch(target, pitch) {
  * @param {number} [options.maxPerCycle] - Pitch cap per cycle
  * @returns {{ runCycle: () => Promise<object>, getStats: () => object, start: () => void, stop: () => void }}
  */
-export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6 * 60 * 60_000, maxPerCycle = 5 }) {
+export function createGrowthEngine({
+  config,
+  logger,
+  selfBaseUrl,
+  intervalMs = 6 * 60 * 60_000,
+  maxPerCycle = 5,
+  getContext,
+}) {
   /** @type {GrowthTarget[]} */
   let targets = parseTargets(config.growth?.targets);
   let cycles = 0;
   let totalPitches = 0;
   /** @type {Array<object>} Inbound pitches from peers, newest first (capped). */
   let inbox = [];
+  /** @type {object} Latest environment reading (conversion, market heat). */
+  let lastContext = {};
 
   /**
    * Run one discover -> pitch -> learn cycle.
@@ -241,10 +267,24 @@ export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6
       return { cycles, pitched: 0, pool: 0 };
     }
 
-    // LEARN: spend the capped effort on the highest-scoring targets first.
+    // LEARN: adapt effort to the environment. Cold conversion damps effort,
+    // hot conversion or a heated market (peers pitching us) raises it to the
+    // cap. Peers in backoff are skipped entirely.
+    lastContext = getContext?.() ?? {};
+    const heat = Math.min(
+      1,
+      (lastContext.trialToPaidRate ?? 0) * 2 + (lastContext.inboundPitches >= 3 ? 0.5 : 0),
+    );
+    const effectiveMax = Math.max(
+      1,
+      Math.min(maxPerCycle, Math.round(maxPerCycle * (0.4 + 0.4 * heat))),
+    );
+    const now = Date.now();
     const ordered = [...targets].sort((a, b) => b.score - a.score || a.pitches - b.pitches);
-    const batch = ordered.slice(0, maxPerCycle);
-    const pitch = buildPitch(config, selfBaseUrl);
+    const batch = ordered
+      .filter((t) => !t.nextAttemptAt || Date.parse(t.nextAttemptAt) <= now)
+      .slice(0, effectiveMax);
+    const pitch = buildPitch(config, selfBaseUrl, getMarketSummary());
 
     let pitched = 0;
     for (const target of batch) {
@@ -258,7 +298,7 @@ export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6
       `Growth cycle ${cycles}: probed ${batch.length}, pitched ${pitched}, pool ${targets.length} ` +
         `(top: ${ordered[0]?.url ?? 'n/a'})`,
     );
-    return { cycles, pitched, pool: targets.length };
+    return { cycles, pitched, probed: batch.length, pool: targets.length, effectiveMax };
   }
 
   /** @type {NodeJS.Timeout|undefined} */
@@ -285,6 +325,56 @@ export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6
     return true;
   }
 
+  /**
+   * Competition radar: what the inbox says about the market.
+   *
+   * @returns {object} Pitch volume, distinct peers, observed price points
+   */
+  function getMarketSummary() {
+    const prices = [];
+    const peers = new Set();
+    for (const p of inbox) {
+      if (p.from) peers.add(String(p.from).replace(/^https?:\/\//, '').split('/')[0]);
+      const matches = typeof p.offer === 'string' ? p.offer.match(/\$\s?([0-9]*\.?[0-9]+)/g) : null;
+      if (matches) for (const raw of matches) prices.push(parseFloat(raw.replace(/[$\s]/g, '')));
+    }
+    return {
+      pitches: inbox.length,
+      distinctPeers: peers.size,
+      pricePoints: prices,
+      min: prices.length ? Math.min(...prices) : null,
+    };
+  }
+
+  /**
+   * Competition response: recommend a price from our funnel + the market.
+   * Advisory only — flipping PRICE is a deliberate, logged decision.
+   *
+   * @returns {object} Current, suggested, reason
+   */
+  function getPricingAdvice() {
+    const current = typeof config?.price === 'string' ? config.price : (config?.price?.amount ?? '$0.001');
+    const value = parseFloat(String(current).replace(/[^0-9.]/g, '')) || 0.001;
+    const market = getMarketSummary();
+    const ctx = getContext ? getContext() : lastContext;
+    const rate = ctx.trialToPaidRate ?? 0;
+    const trials = ctx.freeTrials ?? 0;
+    let suggested = value;
+    let reason = 'hold — no strong signal yet';
+    if (trials >= 20 && rate < 0.1) {
+      suggested = Math.max(value / 2, 0.0001);
+      reason = 'conversion cold after 20+ trials — halve to find demand';
+    } else if (rate >= 0.5) {
+      suggested = Math.min(value * 2, 0.01);
+      reason = 'conversion hot — double while demand holds';
+    } else if (market.min && market.min < value) {
+      suggested = market.min;
+      reason = 'competitors price below us — match to stay competitive';
+    }
+    const fmt = (n) => '$' + Number(n.toFixed(6)).toString();
+    return { current, suggested: fmt(suggested), reason, market };
+  }
+
   return {
     runCycle,
     recordInbound,
@@ -299,6 +389,8 @@ export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6
       totalPitches,
       intervalMs,
       maxPerCycle,
+      context: lastContext,
+      market: getMarketSummary(),
       inbox,
       targets: targets.map((t) => ({
         url: t.url,
@@ -310,6 +402,7 @@ export function createGrowthEngine({ config, logger, selfBaseUrl, intervalMs = 6
         lastAt: t.lastAt,
       })),
     }),
+    getPricingAdvice,
     start: () => {
       if (!config.growth?.enabled) return;
       timer = setInterval(() => {
