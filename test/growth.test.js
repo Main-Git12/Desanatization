@@ -5,7 +5,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { FREE_TIER_MAX_CHARS, sanitizeText, validateSanitizeBody } from '../sanitize.js';
+import { FREE_TIER_MAX_CHARS, sanitizeText, validateBatchBody, validateSanitizeBody } from '../sanitize.js';
 import { getInsights, resetMetrics } from '../middleware/monitoring.js';
 import { startTestServer } from './support/boot.js';
 
@@ -103,6 +103,46 @@ describe('growth loop', () => {
       const insights = await (await server.fetch('/api/insights', { headers: auth })).json();
       assert.equal(insights.conversion.trialToPaidRate, 0);
       assert.ok('freeTrial' in insights.funnel === false || typeof insights.funnel === 'object');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('paid batch endpoint', () => {
+  test('validateBatchBody rejects bad payloads', () => {
+    assert.ok(validateBatchBody({}).error);
+    assert.ok(validateBatchBody({ items: [] }).error);
+    assert.ok(validateBatchBody({ items: Array(11).fill('x') }).error);
+    assert.ok(validateBatchBody({ items: ['ok', 42] }).error);
+    assert.ok(validateBatchBody({ items: ['ok', 'x'.repeat(20_001)] }).error);
+    assert.equal(validateBatchBody({ items: ['a', 'b'] }).items.join(','), 'a,b');
+  });
+
+  test('batch route is paywalled: unpaid POST gets a 402 challenge', async () => {
+    resetMetrics();
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['Mail jane@example.com', 'Call 415-555-1234'] }),
+      });
+      assert.equal(response.status, 402);
+      // The handler never ran, so no batch funnel event was recorded.
+      assert.equal(getInsights().funnel.batchCall, undefined);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('storefront documents the batch route', async () => {
+    const server = await startTestServer();
+    try {
+      const openapi = await (await server.fetch('/openapi.json')).json();
+      assert.ok(openapi.paths['/api/sanitize/batch']);
+      assert.match(await (await server.fetch('/llms.txt')).text(), /batch/);
+      assert.match((await (await server.fetch('/')).json()).product.batch, /batch/);
     } finally {
       await server.close();
     }

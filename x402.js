@@ -84,63 +84,103 @@ export function buildRoutes(config, scheme) {
     return resolvedPrice;
   };
 
-  const discoverable = (method) =>
-    declareDiscoveryExtension(
-      method === 'POST'
-        ? {
-            discoverable: true,
-            method: 'POST',
-            bodyType: 'json',
-            description:
-              'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
-              'POST { "text": "..." } for full jobs (paid).',
-            input: { text: 'Contact me at jane@example.com' },
-            inputSchema: {
-              type: 'object',
-              properties: {
-                text: { type: 'string', description: 'Text to sanitize' },
-              },
-              required: ['text'],
-            },
-            outputSchema: {
-              type: 'object',
-              properties: {
-                clean: { type: 'string', description: 'Sanitized text' },
-                redactions: { type: 'object', description: 'Counts per redaction class' },
-              },
-            },
-          }
-        : {
-            discoverable: true,
-            method: 'GET',
-            description:
-              'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
-              'GET with ?text= for short trials.',
-            input: { text: 'Contact me at jane@example.com' },
-            inputSchema: {
-              type: 'object',
-              properties: {
-                text: { type: 'string', description: 'Text to sanitize' },
-              },
-            },
-            outputSchema: {
-              type: 'object',
-              properties: {
-                clean: { type: 'string', description: 'Sanitized text' },
-                redactions: { type: 'object', description: 'Counts per redaction class' },
-              },
+  const discoverablePost = declareDiscoveryExtension({
+    discoverable: true,
+    method: 'POST',
+    bodyType: 'json',
+    description:
+      'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
+      'POST { "text": "..." } for full jobs (paid).',
+    input: { text: 'Contact me at jane@example.com' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to sanitize' },
+      },
+      required: ['text'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        clean: { type: 'string', description: 'Sanitized text' },
+        redactions: { type: 'object', description: 'Counts per redaction class' },
+      },
+    },
+  });
+
+  const discoverableGet = declareDiscoveryExtension({
+    discoverable: true,
+    method: 'GET',
+    description:
+      'Sanitize dirty text: redacts emails, phones, SSNs, card numbers and secrets. ' +
+      'GET with ?text= for short trials.',
+    input: { text: 'Contact me at jane@example.com' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to sanitize' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        clean: { type: 'string', description: 'Sanitized text' },
+        redactions: { type: 'object', description: 'Counts per redaction class' },
+      },
+    },
+  });
+
+  // Batch: up to 10 texts for ONE settlement. Fewer payment round-trips per
+  // job is a genuine buyer preference — bulk agents pick us for it, and each
+  // settlement is still full revenue.
+  const discoverableBatch = declareDiscoveryExtension({
+    discoverable: true,
+    method: 'POST',
+    bodyType: 'json',
+    description:
+      'Sanitize up to 10 texts in one payment: redacts emails, phones, SSNs, card numbers and secrets. ' +
+      'POST { "items": ["...", "..."] } (1-10 texts, one settlement).',
+    input: { items: ['Contact me at jane@example.com', 'Call 415-555-1234'] },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 10,
+          description: 'Up to 10 texts, sanitized in one paid call',
+        },
+      },
+      required: ['items'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        count: { type: 'integer', description: 'Number of texts sanitized' },
+        results: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              clean: { type: 'string' },
+              redactions: { type: 'object' },
             },
           },
-    );
+        },
+        totalRedactions: { type: 'object', description: 'Redaction counts summed across all items' },
+      },
+    },
+  });
 
-  const makeRoute = (method) => ({
+  const makeRoute = (extensions) => ({
     accepts,
     description: config.resource.description,
     mimeType: config.resource.mimeType,
     serviceName: config.resource.serviceName,
     // Bazaar discovery: this is what puts the endpoint in the x402
     // catalog so agents can find it without a pre-baked integration.
-    extensions: discoverable(method),
+    extensions,
 
     unpaidResponseBody: async () => {
       const resolved = await resolvePrice();
@@ -179,8 +219,10 @@ export function buildRoutes(config, scheme) {
   });
 
   return {
-    [`GET ${config.resource.path}`]: makeRoute('GET'),
-    [`POST ${config.resource.path}`]: makeRoute('POST'),
+    [`GET ${config.resource.path}`]: makeRoute(discoverableGet),
+    [`POST ${config.resource.path}`]: makeRoute(discoverablePost),
+    // Batch: one settlement, up to 10 texts — the volume buyer's route.
+    'POST /api/sanitize/batch': makeRoute(discoverableBatch),
   };
 }
 

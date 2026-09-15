@@ -122,6 +122,7 @@ export function createApp({ config, logger, x402 }) {
       product: {
         sanitize: `POST ${config.resource.path}`,
         freeTrial: `POST /api/sanitize/trial (first ${FREE_TIER_MAX_CHARS} chars, no payment)`,
+        batch: 'POST /api/sanitize/batch (up to 10 texts, one settlement)',
         docs: 'GET /llms.txt',
         openapi: 'GET /openapi.json',
         skill: 'GET /skill.md',
@@ -290,6 +291,37 @@ export function createApp({ config, logger, x402 }) {
   // the documented product (bodies beat query strings past ~2k chars).
   app.get(config.resource.path, serveSanitize);
 
+  // Paid batch: up to BATCH_MAX_ITEMS texts, ONE settlement. Volume buyers get
+  // fewer payment round-trips; we get a larger basket per signature. The
+  // x402 middleware above is the single authority — only settled payers reach
+  // this handler, exactly like the single-text route.
+  const serveSanitizeBatch = (req, res) => {
+    const { items, error } = validateBatchBody(req.body);
+    if (error) {
+      return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
+    }
+    trackFunnel('batchCall');
+    const results = items.map((item) => sanitizeCached(item));
+    const totalRedactions = results.reduce((totals, result) => {
+      for (const [kind, count] of Object.entries(result.redactions)) {
+        totals[kind] = (totals[kind] || 0) + count;
+      }
+      return totals;
+    }, {});
+    logger.debug(`Serving paid batch sanitize (${results.length} items)`);
+    res.json({
+      success: true,
+      count: results.length,
+      results,
+      totalRedactions,
+      cache: cacheStats(),
+      requestId: req.id,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  app.post('/api/sanitize/batch', serveSanitizeBatch);
+
   // --- Errors -------------------------------------------------------------
   app.use((req, res) => {
     res.status(404).json({
@@ -340,6 +372,9 @@ POST ${config.resource.path} — body { "text": "..." } (up to 20k chars).
 2. Sign an exact USDC payment, retry with PAYMENT-SIGNATURE header.
 3. 200 returns { clean, redactions, inputChars, outputChars } + PAYMENT-RESPONSE receipt.
 
+Batch: POST /api/sanitize/batch with { "items": ["...", ...] } — up to 10 texts,
+one settlement, same price. Returns { count, results: [{ clean, redactions }...], totalRedactions }.
+
 Redacts: emails, phone numbers, SSNs, credit-card numbers (Luhn-checked),
 private keys / API keys, Bearer tokens, URL tokens (?token=…).
 
@@ -350,6 +385,7 @@ private keys / API keys, Bearer tokens, URL tokens (?token=…).
 - GET /skill.md — drop-in agent skill
 - POST /api/sanitize/trial — free trial (no payment)
 - POST ${config.resource.path} — paid sanitize (x402)
+- POST /api/sanitize/batch — paid batch: up to 10 texts, one settlement
 - GET /health — liveness · GET /ready — can-take-money readiness
 `;
 }
@@ -412,6 +448,50 @@ function buildOpenApi(config, req) {
           requestBody: { required: true, content: { 'application/json': { schema: sanitizeSchema } } },
           responses: {
             200: { description: 'Trial result + paid upsell', content: { 'application/json': { schema: sanitizeResponse } } },
+          },
+        },
+      },
+      '/api/sanitize/batch': {
+        post: {
+          summary: 'Sanitize up to 10 texts (paid, one settlement)',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['items'],
+                  properties: {
+                    items: {
+                      type: 'array',
+                      items: { type: 'string', maxLength: 20000 },
+                      minItems: 1,
+                      maxItems: 10,
+                      description: 'Texts to sanitize (one payment covers all)',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Sanitized results + totals across all items',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean' },
+                      count: { type: 'integer' },
+                      results: { type: 'array', items: sanitizeResponse },
+                      totalRedactions: { type: 'object' },
+                    },
+                  },
+                },
+              },
+            },
+            402: { description: 'Payment required — read PAYMENT-REQUIRED header' },
           },
         },
       },
