@@ -8,19 +8,22 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Fully-formed route config with explicit extensions object
+// Complete route config definition
 const routeConfig = {
   price: config.price || '$0.001',
   network: config.network || 'base-sepolia',
   payTo: config.payToAddress,
   extensions: {},
+  description: 'Protected API Resource',
 };
 
+// Define both your exact endpoint AND the wildcard fallback route
 const routes = {
   '/api/resource': routeConfig,
+  '*': routeConfig,
 };
 
-// 2. Instantiate server with paywall options populated
+// Instantiate server with catch-all covered
 const server = new x402HTTPResourceServer({
   schemes: config.schemes || [],
   paywall: {
