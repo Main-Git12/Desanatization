@@ -1,6 +1,6 @@
 import express from 'express';
 import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
@@ -12,13 +12,11 @@ const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 // In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Safely handle private key: use env var if present, otherwise generate or warn
-let serverPrivateKey = process.env.SERVER_PRIVATE_KEY;
-if (!serverPrivateKey || serverPrivateKey === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-  console.warn('WARNING: SERVER_PRIVATE_KEY not set or invalid. On-chain settlement will fail until funded/configured.');
-  serverPrivateKey = generatePrivateKey(); // fallback to prevent startup crash
+// Load the server executor wallet from Railway environment variables
+const serverPrivateKey = process.env.SERVER_PRIVATE_KEY;
+if (!serverPrivateKey) {
+  console.error('CRITICAL ERROR: SERVER_PRIVATE_KEY is missing from environment variables!');
 }
-
 const serverAccount = privateKeyToAccount(serverPrivateKey);
 const serverClient = createWalletClient({
   account: serverAccount,
