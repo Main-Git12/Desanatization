@@ -21,7 +21,8 @@ const paymentConfig = {
     {
       scheme: 'exact',
       network: 'eip155:8453',
-      amount: '10000',           // Atomic units (0.01 USDC)
+      price: '$0.01',                                     // Required by client auto-parser to avoid NaN
+      amount: '10000',                                    // Atomic units (0.01 USDC with 6 decimals)
       asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base Mainnet
       payTo: RECEIVING_WALLET,
       extra: {
