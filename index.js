@@ -8,7 +8,7 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// Define routes with extensions set to an empty object
+// 1. Define route configuration with explicit extensions object
 const routes = {
   '/api/resource': {
     price: config.price,
@@ -17,7 +17,7 @@ const routes = {
   },
 };
 
-// Pass routes directly into constructor options
+// 2. Pass schemes, paywall, AND routes into x402HTTPResourceServer
 const server = new x402HTTPResourceServer({
   schemes: config.schemes,
   paywall: config.paywall,
