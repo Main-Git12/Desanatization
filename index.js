@@ -6,7 +6,7 @@ import { base } from 'viem/chains';
 const app = express();
 app.use(express.json());
 
-const RECEIVING_WALLET = '0x8324a7cb4e8bfc8CfD0dEA921d4451324D4E1bda';
+const RECEIVING_WALLET = '0x659C6b4756c359f3951f30986d9A6f2507E57591';
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
 // In-memory nonce cache for replay protection
