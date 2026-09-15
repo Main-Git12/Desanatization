@@ -1,6 +1,6 @@
 import express from 'express';
 import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
@@ -12,11 +12,12 @@ const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 // In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Load the server executor wallet from Railway environment variables
-const serverPrivateKey = process.env.SERVER_PRIVATE_KEY;
-if (!serverPrivateKey) {
-  console.error('CRITICAL ERROR: SERVER_PRIVATE_KEY is missing from environment variables!');
+// Safely load server private key (fallback to generated key if missing to prevent crashes)
+const serverPrivateKey = process.env.SERVER_PRIVATE_KEY || generatePrivateKey();
+if (!process.env.SERVER_PRIVATE_KEY) {
+  console.warn('WARNING: SERVER_PRIVATE_KEY is missing! Using a temporary fallback key. On-chain settlement will fail until configured.');
 }
+
 const serverAccount = privateKeyToAccount(serverPrivateKey);
 const serverClient = createWalletClient({
   account: serverAccount,
@@ -130,7 +131,7 @@ app.get('/api/premium-data', async (req, res) => {
       return res.status(402).json({ error: 'Invalid payment details or signature' });
     }
 
-    // 3. Execute On-Chain Settlement (Pull USDC into your wallet)
+    // 3. Execute On-Chain Settlement
     console.log(`Executing on-chain settlement for nonce ${authorization.nonce}...`);
     const hash = await serverClient.writeContract({
       address: USDC_ADDRESS,
