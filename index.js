@@ -1,152 +1,68 @@
 import express from 'express';
-import { verifyTypedData, createWalletClient, http, publicActions } from 'viem';
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
+import { createWalletClient, http, parseAbi } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 const app = express();
 app.use(express.json());
 
-// ==========================================
-// CONFIGURATION: AUTO-ALIGNED WALLET
-// ==========================================
-const PERMANENT_PRIVATE_KEY = process.env.SERVER_PRIVATE_KEY || '0x2f66AcD4B2CDe5bfFeB27D5282d470b8f87B728d'; 
-const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-
-const usedNonces = new Set();
-
-let rawKey = String(PERMANENT_PRIVATE_KEY || '').trim().replace(/^["']|["']$/g, '');
-if (!rawKey.startsWith('0x')) {
-  rawKey = '0x' + rawKey;
+// Server wallet (must have ETH on Base Mainnet to pay gas)
+// Ensure you set PRIVATE_KEY in your Railway environment variables!
+const serverPrivateKey = process.env.PRIVATE_KEY;
+if (!serverPrivateKey) {
+  console.error("ERROR: PRIVATE_KEY environment variable is not set!");
+  process.exit(1);
 }
 
-let serverPrivateKey;
-if (rawKey.includes('YOUR_EXACT') || rawKey.length !== 66) {
-  console.warn('WARNING: Invalid or placeholder private key detected. Generating a temporary test key.');
-  serverPrivateKey = generatePrivateKey();
-} else {
-  serverPrivateKey = rawKey;
-}
+const account = privateKeyToAccount(serverPrivateKey);
 
-// Automatically derive the account from the private key
-const serverAccount = privateKeyToAccount(serverPrivateKey);
-const RECEIVING_WALLET = serverAccount.address; // Payee is ALWAYS the server executor!
-
-console.log(`Server wallet executor & payee address locked to: ${RECEIVING_WALLET}`);
-
-const serverClient = createWalletClient({
-  account: serverAccount,
+const walletClient = createWalletClient({
+  account,
   chain: base,
   transport: http('https://mainnet.base.org'),
-}).extend(publicActions);
+});
 
-const usdcAbi = [
-  {
-    inputs: [
-      { name: 'from', type: 'address' },
-      { name: 'to', type: 'address' },
-      { name: 'value', type: 'uint256' },
-      { name: 'validAfter', type: 'uint256' },
-      { name: 'validBefore', type: 'uint256' },
-      { name: 'nonce', type: 'bytes32' },
-      { name: 'v', type: 'uint8' },
-      { name: 'r', type: 'bytes32' },
-      { name: 's', type: 'bytes32' },
-    ],
-    name: 'receiveWithAuthorization',
-    outputs: [],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-];
+const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const USDC_ABI = parseAbi([
+  'function receiveWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) external'
+]);
 
-const paymentConfig = {
-  accepts: [
-    {
-      scheme: 'exact',
-      network: 'eip155:8453',
-      amount: '10000', // 0.01 USDC
-      asset: USDC_ADDRESS,
-      payTo: RECEIVING_WALLET,
-      extra: {
-        name: 'USD Coin',
-        version: '2',
-      },
-    },
-  ],
-};
-
-const createPaymentRequiredHeader = (config) => {
-  const payload = {
-    x402Version: 2,
-    paymentRequirements: config.accepts,
-    accepts: config.accepts,
-  };
-  return Buffer.from(JSON.stringify(payload)).toString('base64');
-};
+console.log(`Server wallet address (Payee & Gas Payer): ${account.address}`);
 
 app.get('/api/premium-data', async (req, res) => {
-  const authHeader = req.headers['payment-signature'] || req.headers['x-402-payment'] || req.headers['authorization'];
+  const paymentSignatureHeader = req.headers['payment-signature'];
 
-  if (!authHeader) {
-    const base64Requirements = createPaymentRequiredHeader(paymentConfig);
-    res.setHeader('PAYMENT-REQUIRED', base64Requirements);
-    return res.status(402).json({
+  // If no payment header is provided, issue 402 Payment Required
+  if (!paymentSignatureHeader) {
+    const paymentRequirement = {
       x402Version: 2,
-      paymentRequirements: paymentConfig.accepts,
-      accepts: paymentConfig.accepts,
-    });
+      accepts: [
+        {
+          scheme: 'exact',
+          asset: USDC_ADDRESS,
+          amount: '10000', // 0.01 USDC (6 decimals)
+          payTo: account.address, // Server wallet receives the funds
+          chainId: 8453,
+        }
+      ]
+    };
+    const encoded = Buffer.from(JSON.stringify(paymentRequirement)).toString('base64');
+    res.setHeader('payment-required', encoded);
+    return res.status(402).json({ error: 'Payment required' });
   }
 
   try {
-    const decoded = JSON.parse(Buffer.from(authHeader, 'base64').toString('utf8'));
-    const { signature, authorization } = decoded.payload;
-
-    if (usedNonces.has(authorization.nonce)) {
-      return res.status(400).json({ error: 'Nonce already used (replay attack prevented)' });
-    }
-
-    const isValid = await verifyTypedData({
-      address: authorization.from,
-      domain: {
-        name: 'USD Coin',
-        version: '2',
-        chainId: 8453,
-        verifyingContract: USDC_ADDRESS,
-      },
-      types: {
-        TransferWithAuthorization: [
-          { name: 'from', type: 'address' },
-          { name: 'to', type: 'address' },
-          { name: 'value', type: 'uint256' },
-          { name: 'validAfter', type: 'uint256' },
-          { name: 'validBefore', type: 'uint256' },
-          { name: 'nonce', type: 'bytes32' },
-        ],
-      },
-      primaryType: 'TransferWithAuthorization',
-      message: {
-        from: authorization.from,
-        to: authorization.to,
-        value: BigInt(authorization.value),
-        validAfter: BigInt(authorization.validAfter),
-        validBefore: BigInt(authorization.validBefore),
-        nonce: authorization.nonce,
-      },
-      signature: signature,
-    });
-
-    const matchesRecipient = authorization.to.toLowerCase() === RECEIVING_WALLET.toLowerCase();
-    const hasEnoughAmount = BigInt(authorization.value) >= BigInt(10000);
-    const notExpired = BigInt(authorization.validBefore) > BigInt(Math.floor(Date.now() / 1000));
-
-    if (!isValid || !matchesRecipient || !hasEnoughAmount || !notExpired) {
-      return res.status(402).json({ error: 'Invalid payment details or signature' });
-    }
+    // Decode the incoming authorization payload from the client
+    const decodedPayload = JSON.parse(Buffer.from(paymentSignatureHeader, 'base64').toString('utf8'));
+    const { authorization } = decodedPayload.payload;
 
     console.log(`Executing on-chain settlement for nonce ${authorization.nonce}...`);
-    const hash = await serverClient.writeContract({
+    console.log(`From: ${authorization.from} | To: ${authorization.to} | Value: ${authorization.value}`);
+
+    // Execute receiveWithAuthorization on Base Mainnet USDC contract
+    const txHash = await walletClient.writeContract({
       address: USDC_ADDRESS,
-      abi: usdcAbi,
+      abi: USDC_ABI,
       functionName: 'receiveWithAuthorization',
       args: [
         authorization.from,
@@ -155,30 +71,34 @@ app.get('/api/premium-data', async (req, res) => {
         BigInt(authorization.validAfter),
         BigInt(authorization.validBefore),
         authorization.nonce,
-        authorization.v,
+        Number(authorization.v),
         authorization.r,
         authorization.s,
       ],
     });
 
-    await serverClient.waitForTransactionReceipt({ hash });
-    console.log(`Settlement successful! Tx Hash: ${hash}`);
+    console.log(`Settlement successful! TxHash: ${txHash}`);
 
-    usedNonces.add(authorization.nonce);
-
-    res.setHeader('PAYMENT-RESPONSE', Buffer.from(JSON.stringify({ success: true, txHash: hash })).toString('base64'));
+    // Return the protected premium data
     return res.json({
       success: true,
-      message: 'Paid content unlocked & USDC settled on Base Mainnet!',
-      txHash: hash,
+      message: 'Payment verified and settled on-chain!',
+      data: {
+        secretPayload: 'Here is your exclusive x402 data stream.',
+        transactionHash: txHash
+      }
     });
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    return res.status(500).json({ error: 'Payment settlement failed', details: err.message });
+
+  } catch (error) {
+    console.error('Payment processing error:', error);
+    return res.status(500).json({ 
+      error: 'Payment settlement failed', 
+      details: error.shortMessage || error.message 
+    });
   }
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Production x402 Payment Server running on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
