@@ -15,7 +15,7 @@ export function loadConfig() {
         '/api/resource': {
           price: '$0.001',
           network: 'base-sepolia',
-          extensions: {}, // Required to pass x402 route validation
+          extensions: {},
         },
       },
     },
