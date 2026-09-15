@@ -12,13 +12,30 @@ const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 // In-memory nonce cache for replay protection
 const usedNonces = new Set();
 
-// Safely load server private key (fallback to generated key if missing to prevent crashes)
-const serverPrivateKey = process.env.SERVER_PRIVATE_KEY || generatePrivateKey();
-if (!process.env.SERVER_PRIVATE_KEY) {
-  console.warn('WARNING: SERVER_PRIVATE_KEY is missing! Using a temporary fallback key. On-chain settlement will fail until configured.');
+// Safely parse and clean private key from environment variables
+let rawKey = process.env.SERVER_PRIVATE_KEY;
+if (rawKey) {
+  rawKey = rawKey.trim().replace(/^["']|["']$/g, ''); // Strip accidental quotes or spaces
+  if (!rawKey.startsWith('0x')) {
+    rawKey = '0x' + rawKey;
+  }
+}
+
+let serverPrivateKey;
+try {
+  if (rawKey && rawKey.length === 66) {
+    serverPrivateKey = rawKey;
+  } else {
+    throw new Error('Invalid length or format');
+  }
+} catch (e) {
+  console.warn('WARNING: SERVER_PRIVATE_KEY is missing or invalid. Falling back to a generated key for testing.');
+  serverPrivateKey = generatePrivateKey();
 }
 
 const serverAccount = privateKeyToAccount(serverPrivateKey);
+console.log(`Server wallet executor address: ${serverAccount.address}`);
+
 const serverClient = createWalletClient({
   account: serverAccount,
   chain: base,
