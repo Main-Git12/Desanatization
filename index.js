@@ -8,22 +8,24 @@ const config = loadConfig();
 const app = express();
 app.use(express.json());
 
-// 1. Define route configuration with explicit extensions object
-const routes = {
-  '/api/resource': {
-    price: config.price,
-    network: config.network,
-    extensions: {},
-  },
-};
-
-// 2. Pass schemes, paywall, AND routes into x402HTTPResourceServer
+// Initialize server with minimal options to avoid x402 route validation bugs
 const server = new x402HTTPResourceServer({
-  schemes: config.schemes,
-  paywall: config.paywall,
-  routes: routes,
+  schemes: config.schemes || [],
 });
 
+// Explicit route definition with all expected keys present
+const routeConfig = {
+  price: config.price || '$0.001',
+  network: config.network || 'base-sepolia',
+  extensions: {},
+  description: 'Protected API Resource',
+};
+
+const routes = {
+  '/api/resource': routeConfig,
+};
+
+// Mount express endpoint using payment middleware
 app.get('/api/resource', paymentMiddleware(server, routes), (req, res) => {
   res.json({
     status: 'success',
