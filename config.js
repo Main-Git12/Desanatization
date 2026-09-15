@@ -228,6 +228,8 @@ export function loadConfig(env = process.env) {
   const config = {
     nodeEnv,
     isProduction,
+    // Railway injects PORT at runtime (currently 8080). Local dev falls back
+    // to 3000; production relies on the injected value.
     port: readInt(env.PORT, 'PORT', { min: 1, max: 65535 }, problems, 3000),
     host: env.HOST || '0.0.0.0',
     logLevel: env.LOG_LEVEL || 'info',
