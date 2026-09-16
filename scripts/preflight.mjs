@@ -120,10 +120,19 @@ if (headerValue) {
 }
 
 // --- 3. Facilitator supports what we advertise --------------------------------
-// CDP (and other keyed facilitators) require auth even on /supported, so the
-// gate accepts the same JSON header object the runtime uses.
+// CDP requires a fresh signed JWT per request, so its /supported endpoint can
+// never be probed unauthenticated. For CDP the server's own paywallReady
+// (set by the boot-time AUTHENTICATED sync) is the proof of support; for
+// plain facilitators we probe /supported directly.
 const facilitatorUrl = facilitatorOverride ?? KNOWN_FACILITATORS[network ?? ''];
 if (facilitatorUrl) {
+  if (facilitatorUrl.includes('api.cdp.coinbase.com')) {
+    check(
+      'CDP facilitator support (via authenticated boot sync)',
+      paywallReady,
+      'paywallReady=true proves the signed-JWT sync against CDP succeeded',
+    );
+  } else {
   /** @type {Record<string, string>} */
   let authHeaders = {};
   const rawHeaders = process.env.PREFLIGHT_FACILITATOR_AUTH_HEADERS;
@@ -153,6 +162,7 @@ if (facilitatorUrl) {
     }
   }
   check('facilitator supports scheme+network', supportsExact, `${facilitatorUrl} (HTTP ${supported.status})`);
+  }
 } else {
   check('facilitator known for network', false, `no known facilitator for ${network} — set PREFLIGHT_FACILITATOR_URL`);
 }

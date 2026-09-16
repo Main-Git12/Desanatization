@@ -161,7 +161,7 @@ describe('go-live guards', () => {
       FACILITATOR_URL: 'https://api.cdp.coinbase.com/platform/v2/x402',
     });
     assert.ok(
-      config.warnings.some((w) => /no FACILITATOR_AUTH_HEADER\/HEADERS/.test(w)),
+      config.warnings.some((w) => /no facilitator credential/.test(w)),
       `expected auth warning, got: ${JSON.stringify(config.warnings)}`,
     );
   });
@@ -176,5 +176,60 @@ describe('go-live guards', () => {
     assert.ok(MAINNET_NETWORKS.has('eip155:8453'));
     assert.ok(MAINNET_NETWORKS.has('eip155:1'));
     assert.ok(!MAINNET_NETWORKS.has('eip155:84532'));
+  });
+
+  test('CDP JWT credentials: mainnet + CDP facilitator loads cleanly and flags cdpAuth', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      NETWORK: 'eip155:8453',
+      FACILITATOR_URL: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      CDP_API_KEY_ID: '7cf18512-aaaa-bbbb-cccc-ddddeeeeffff',
+      CDP_API_KEY_SECRET: Buffer.alloc(64, 7).toString('base64'),
+    });
+    assert.equal(config.facilitator.cdp.keyId, '7cf18512-aaaa-bbbb-cccc-ddddeeeeffff');
+    assert.equal(config.facilitator.authHeader, undefined);
+    assert.equal(config.facilitator.authHeaders, undefined);
+    const described = describeConfig(config);
+    assert.equal(described.facilitator.cdpAuth, true);
+    assert.equal(described.facilitator.authenticated, true);
+  });
+
+  test('CDP variables must be paired', () => {
+    const error = captureThrow(() => loadConfig({ ...baseEnv, CDP_API_KEY_ID: 'id-only' }));
+    assert.ok(error instanceof ConfigError);
+    assert.match(error.message, /must be set together/);
+  });
+
+  test('CDP credentials and static auth headers are mutually exclusive', () => {
+    const error = captureThrow(() =>
+      loadConfig({
+        ...baseEnv,
+        CDP_API_KEY_ID: 'id',
+        CDP_API_KEY_SECRET: Buffer.alloc(64, 7).toString('base64'),
+        FACILITATOR_AUTH_HEADER: 'Bearer static',
+      }),
+    );
+    assert.ok(error instanceof ConfigError);
+    assert.match(error.message, /not both/);
+  });
+
+  test('CDP credentials against a non-CDP facilitator warn that they are unused', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      CDP_API_KEY_ID: 'id',
+      CDP_API_KEY_SECRET: Buffer.alloc(64, 7).toString('base64'),
+    });
+    assert.ok(config.warnings.some((w) => /will be unused/.test(w)));
+  });
+
+  test('describeConfig never leaks the CDP secret', () => {
+    const secret = Buffer.alloc(64, 9).toString('base64');
+    const config = loadConfig({
+      ...baseEnv,
+      FACILITATOR_URL: 'https://api.cdp.coinbase.com/platform/v2/x402',
+      CDP_API_KEY_ID: 'id-x',
+      CDP_API_KEY_SECRET: secret,
+    });
+    assert.equal(JSON.stringify(describeConfig(config)).includes(secret), false);
   });
 });

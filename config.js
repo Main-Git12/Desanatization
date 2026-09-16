@@ -256,11 +256,32 @@ export function loadConfig(env = process.env) {
   // surface it as a loud warning rather than an error.
   if (
     network && MAINNET_NETWORKS.has(network) &&
-    !env.FACILITATOR_AUTH_HEADER && !env.FACILITATOR_AUTH_HEADERS
+    !env.FACILITATOR_AUTH_HEADER && !env.FACILITATOR_AUTH_HEADERS && !env.CDP_API_KEY_ID
   ) {
     warnings.push(
-      `NETWORK=${network} is mainnet but no FACILITATOR_AUTH_HEADER/HEADERS is set. ` +
+      `NETWORK=${network} is mainnet but no facilitator credential is set ` +
+        '(CDP_API_KEY_ID/SECRET, FACILITATOR_AUTH_HEADER, or FACILITATOR_AUTH_HEADERS). ' +
         'If your facilitator requires an API key, verify calls will 401 and no payments will settle.',
+    );
+  }
+
+  // CDP credential sanity: paired variables, no auth-mode ambiguity, and a
+  // loud note when the credentials cannot apply to the configured facilitator.
+  const cdpKeyId = String(env.CDP_API_KEY_ID || '').trim() || undefined;
+  const cdpKeySecret = String(env.CDP_API_KEY_SECRET || '').trim() || undefined;
+  if (Boolean(cdpKeyId) !== Boolean(cdpKeySecret)) {
+    problems.push('CDP_API_KEY_ID and CDP_API_KEY_SECRET must be set together');
+  }
+  if (cdpKeyId && cdpKeySecret && (env.FACILITATOR_AUTH_HEADER || env.FACILITATOR_AUTH_HEADERS)) {
+    problems.push(
+      'Set either CDP_API_KEY_ID/CDP_API_KEY_SECRET (signed-JWT auth) or ' +
+        'FACILITATOR_AUTH_HEADER/HEADERS (static auth) — not both.',
+    );
+  }
+  if (cdpKeyId && cdpKeySecret && !facilitatorUrl.includes('api.cdp.coinbase.com')) {
+    warnings.push(
+      'CDP_API_KEY_ID/SECRET are set but FACILITATOR_URL is not the Coinbase CDP facilitator ' +
+        '(api.cdp.coinbase.com) — the CDP credentials will be unused.',
     );
   }
 
@@ -291,9 +312,13 @@ export function loadConfig(env = process.env) {
       // Required by some production facilitators (e.g. Coinbase CDP).
       authHeader: String(env.FACILITATOR_AUTH_HEADER || '').trim() || undefined,
       // Some production facilitators need named headers instead of a Bearer
-      // token (e.g. Coinbase CDP wants X-CDP-API-KEY-ID / X-CDP-API-KEY-SECRET).
-      // Provide them as a JSON object string.
+      // token. Provide them as a JSON object string.
       authHeaders: parseAuthHeaders(env.FACILITATOR_AUTH_HEADERS, problems),
+      // Coinbase CDP: per-request signed-JWT auth from these two variables.
+      cdp: {
+        keyId: String(env.CDP_API_KEY_ID || '').trim() || undefined,
+        keySecret: String(env.CDP_API_KEY_SECRET || '').trim() || undefined,
+      },
     },
 
     network,
@@ -373,7 +398,11 @@ export function describeConfig(config) {
     facilitator: {
       url: config.facilitator.url,
       timeoutMs: config.facilitator.timeoutMs,
-      authenticated: Boolean(config.facilitator.authHeader),
+      authenticated: Boolean(
+        config.facilitator.authHeader || config.facilitator.authHeaders ||
+          (config.facilitator.cdp?.keyId && config.facilitator.cdp?.keySecret),
+      ),
+      cdpAuth: Boolean(config.facilitator.cdp?.keyId && config.facilitator.cdp?.keySecret),
     },
     allowedOrigins: config.allowedOrigins.length > 0 ? config.allowedOrigins : ['<none>'],
     strictStartup: config.strictStartup,

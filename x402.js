@@ -14,6 +14,7 @@ import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } fro
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { paymentMiddlewareFromHTTPServer } from '@x402/express';
 import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
+import { createCdpAuthHeaders } from './cdp-auth.js';
 
 /**
  * Build a facilitator HTTP client, adding auth headers when configured.
@@ -28,7 +29,15 @@ export function createFacilitatorClient(config) {
     timeoutMs: config.facilitator.timeoutMs,
   };
 
-  if (config.facilitator.authHeaders) {
+  if (config.facilitator.cdp?.keyId && config.facilitator.cdp?.keySecret) {
+    // Coinbase CDP: a fresh JWT per call, signed and bound to method+host+path.
+    // Static headers are rejected here — config validation forbids both.
+    options.createAuthHeaders = createCdpAuthHeaders({
+      keyId: config.facilitator.cdp.keyId,
+      keySecret: config.facilitator.cdp.keySecret,
+      baseUrl: config.facilitator.url,
+    });
+  } else if (config.facilitator.authHeaders) {
     // Some facilitators (e.g. Coinbase CDP) require named API headers rather
     // than a Bearer token — pass the configured map verbatim.
     const headers = { ...config.facilitator.authHeaders };
