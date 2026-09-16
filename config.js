@@ -364,16 +364,25 @@ export function loadConfig(env = process.env) {
       maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 'RATE_LIMIT_MAX_REQUESTS', { min: 1 }, problems, 60),
     },
 
-    // Outbound growth engine: opt-in, capped, self-learning.
-    growth: {
-      enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, false),
-      targets: env.GROWTH_TARGETS,
-      discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
-      publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
-      intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
-      maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
-      statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
-      agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
+     // Outbound growth engine: opt-in, capped, self-learning.
+     growth: {
+       enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, false),
+       targets: env.GROWTH_TARGETS,
+       discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
+       // Expanded discovery: scan GitHub, Google Cloud Agent Gallery, and
+       // Salesforce AgentExchange for new x402/crypto/AI-agent peers.
+       discoverFromAll: readBool(
+         env.GROWTH_DISCOVER_FROM_ALL,
+         'GROWTH_DISCOVER_FROM_ALL',
+         problems,
+         true,
+       ),
+       githubToken: String(env.GITHUB_TOKEN || '').trim() || undefined,
+       publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
+       intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
+       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
+       statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
+       agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
       // Task agent self-review cadence (0 = off). The agent audits its own
       // recent outcomes and prunes dead skills on this interval, so the
       // library improves while the service is idle.

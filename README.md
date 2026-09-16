@@ -122,8 +122,10 @@ process exits rather than serving traffic that can never be paid.
 | `NOTIFICATION_WEBHOOK_URL` | no | – | Webhook channel: POST JSON events here |
 | `NOTIFICATION_SMTP_URL` | no | – | SMTP channel: HTTP-to-email bridge URL |
 | `NOTIFICATION_FROM` | no | – | SMTP channel: sender address |
-| `NOTIFICATION_TO` | no | – | SMTP channel: recipient (e.g. `andrew.peal12@gmail.com`) |
+| `NOTIFICATION_TO` | no | – | SMTP channel: recipient |
 | `NOTIFICATION_STATE_PATH` | no | – | Where the first-purchase milestone is persisted |
+| `GROWTH_DISCOVER_FROM_ALL` | no | `true` | Scan GitHub, Google Cloud Agent Gallery, and Salesforce AgentExchange for new peers |
+| `GITHUB_TOKEN` | no | – | Optional GitHub API token for higher discovery rate limits |
 
 Legacy x402 v1 network names (`base`, `base-sepolia`, …) are accepted and
 translated to CAIP-2 with a warning.

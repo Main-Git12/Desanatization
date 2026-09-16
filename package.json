@@ -13,6 +13,8 @@
     "test": "node --test",
     "test:watch": "node --test --watch",
     "client": "node clients/fetch-client.mjs",
+    "log:review": "node scripts/log-review.mjs",
+    "log:live": "node scripts/log-review.mjs --live",
     "preflight": "node scripts/preflight.mjs",
     "verify:live": "node scripts/verify-live.mjs"
   },

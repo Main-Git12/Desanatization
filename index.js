@@ -9,6 +9,8 @@ import { ConfigError, describeConfig, loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { createApp } from './app.js';
 import { createX402 } from './x402.js';
+import fsSync from 'node:fs';
+import { dirname, resolve as resolvePath } from 'node:path';
 
 /**
  * Well-known demo addresses. Paying into one of these means paying a stranger,
@@ -74,6 +76,17 @@ async function main() {
 
   const x402 = createX402(config, logger);
   const { app, dispose, growthEngine, notifier, supervisor } = createApp({ config, logger, x402 });
+
+  // Ensure the data directory exists for persistent state (growth ledger,
+  // agent skills, notification milestones). In Docker/Railway this is a
+  // mounted volume at /app/data. In local dev it is a sibling directory.
+  try {
+    const dataDir = config.growth?.statePath || config.growth?.agentStatePath || config.notifications?.statePath || 'data';
+    const dir = dirname(resolvePath(dataDir));
+    fsSync.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    logger.warn(`Could not create data directory for state persistence: ${error.message}`);
+  }
 
   const server = app.listen(config.port, config.host, () => {
     logger.info(`HTTP server listening on ${config.host}:${config.port}`);

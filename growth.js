@@ -17,6 +17,7 @@
 
 import fsSync from 'node:fs';
 import { dirname } from 'node:path';
+import { discoverAll } from './discoveries.js';
 
 const X402_CHALLENGE_HEADER = 'payment-required';
 
@@ -347,6 +348,24 @@ export function createGrowthEngine({
         } catch {
           logger.warn('Growth: discovery feed was not valid JSON — skipping.');
         }
+      }
+    }
+
+    // Expanded discovery: scan development hubs, GitHub repos, Google Cloud
+    // Agent Gallery and Salesforce AgentExchange for new x402/crypto peers.
+    // Each source is best-effort — a failure logs a warning and continues.
+    if (config.growth?.discoverFromAll) {
+      try {
+        const origins = await discoverAll({
+          githubToken: config.growth?.githubToken,
+          log: (message) => logger.warn(message),
+        });
+        if (origins.length > 0) {
+          logger.info(`Growth: discovered ${origins.length} new targets from expanded sources`);
+          targets = mergeDiscovered(targets, origins.map((url) => ({ url, kind: 'discovered' })));
+        }
+      } catch (error) {
+        logger.warn(`Growth: expanded discovery failed: ${error.message}`);
       }
     }
 
