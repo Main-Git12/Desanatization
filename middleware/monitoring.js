@@ -30,6 +30,9 @@ const metrics = {
   receipts: [],
   // Referral leaderboard: which ?ref= brought paying buyers.
   referrals: {},
+  // Referral revenue: 10% of referred spend credited back to the referrer.
+  referralRevenue: {},
+  referralCredits: {},
   // Buyer retention: per-payer purchase counts (addresses are public on-chain
   // facts, already in /receipts). Powers repeatPurchaseRate in /api/insights.
   buyers: {},
@@ -146,6 +149,25 @@ export function trackReferral(ref) {
 }
 
 /**
+ * Record a referral credit: the referrer earns a share of the referred
+ * buyer's future spend. Every buyer becomes a salesperson.
+ *
+ * @param {string} ref - Referral id that produced the sale
+ * @param {string} amount - Atomic amount credited
+ * @param {string} asset - Asset the credit is in
+ * @returns {void}
+ */
+export function creditReferral(ref, amount, asset = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') {
+  if (!ref || !amount) return;
+  const share = BigInt(amount) / 10n; // 10% to the referrer
+  if (share === 0n) return;
+  const key = `${asset}`;
+  metrics.referralRevenue[key] = String(BigInt(metrics.referralRevenue[key] || '0') + share);
+  metrics.referralCredits[ref] = String(BigInt(metrics.referralCredits[ref] || '0') + share);
+  logger.info(`Referral credit: ${share} of ${asset} to ref ${ref}`);
+}
+
+/**
  * Record why a payment failed. Feeds the reason breakdown only —
  * `failedPayments` itself is counted once, from the HTTP 402 response, so a
  * payment is never double counted when both signals fire.
@@ -184,6 +206,12 @@ export function getInsights() {
     .map(([ref, sales]) => ({ ref, sales }))
     .sort((a, b) => b.sales - a.sales)
     .slice(0, 10);
+  const referralRevenue = Object.entries(metrics.referralRevenue)
+    .map(([asset, amount]) => ({ asset, amount: String(amount) }));
+  const referralCredits = Object.entries(metrics.referralCredits)
+    .map(([ref, amount]) => ({ ref, amount: String(amount) }))
+    .sort((a, b) => BigInt(b.amount) - BigInt(a.amount))
+    .slice(0, 10);
   const buyerEntries = Object.entries(metrics.buyers);
   const returningBuyers = buyerEntries.filter(([, b]) => b.purchases >= 2).length;
   return {
@@ -214,6 +242,8 @@ export function getInsights() {
       failureReasons: { ...metrics.paymentFailureReasons },
     },
     referrals,
+    referralRevenue,
+    referralCredits,
     revenueAtomicByAsset: { ...metrics.revenueAtomicByAsset },
   };
 }

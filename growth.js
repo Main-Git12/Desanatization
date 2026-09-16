@@ -319,6 +319,10 @@ export function createGrowthEngine({
       return { cycles, pitched: 0, pool: 0 };
     }
 
+    // Continuously refresh the pool from the live CDP Bazaar so the engine
+    // grows its own reach instead of relying on a static list.
+    await discoverFromBazaar();
+
     // Never pitch ourselves. A self-canary target (GROWTH_TARGETS pointing at
     // our own URL) is a useful liveness check, but pitching our own outreach
     // surface just inflates the inbound counter and teaches the engine that
@@ -412,6 +416,42 @@ export function createGrowthEngine({
       pricePoints: prices,
       min: prices.length ? Math.min(...prices) : null,
     };
+  }
+
+  /**
+   * Query the CDP Bazaar for live x402 services and merge them into the
+   * target pool. The engine grows its own reach — no manual list needed.
+   *
+   * @returns {Promise<GrowthTarget[]>} Newly discovered peers
+   */
+  async function discoverFromBazaar() {
+    const bazaarUrl = config.growth?.discoveryUrl ?? 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
+    try {
+      const res = await fetchSafe(bazaarUrl, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return [];
+      const data = await res.json();
+      const items = data?.items ?? [];
+      const seen = new Set(targets.map((t) => t.url));
+      const fresh = [];
+      for (const item of items) {
+        const url = item?.resource;
+        if (!url || typeof url !== 'string' || !/^https?:\/\//.test(url)) continue;
+        if (seen.has(url)) continue;
+        const ownHost = selfBaseUrl ? new URL(selfBaseUrl).host.toLowerCase() : null;
+        if (ownHost && new URL(url).host.toLowerCase() === ownHost) continue;
+        const kind = item?.type === 'http' ? 'bazaar' : 'manual';
+        const target = { url: url.replace(/\/+$/, ''), kind, score: 1, pitches: 0, responses: 0 };
+        targets.push(target);
+        fresh.push(target);
+        seen.add(url);
+      }
+      if (fresh.length) logger.info(`Growth: discovered ${fresh.length} new peers from Bazaar`);
+      return fresh;
+    } catch (error) {
+      const log = typeof logger.debug === 'function' ? logger.debug.bind(logger) : logger.info.bind(logger);
+      log(`Growth: Bazaar discovery failed: ${error.message}`);
+      return [];
+    }
   }
 
   /**

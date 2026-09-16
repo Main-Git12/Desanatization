@@ -454,6 +454,11 @@ export function createApp({ config, logger, x402 }) {
     }
     trackFunnel('paidCall');
     trackReferral(referralOf(req));
+    // Referral credit: the agent who brought this buyer earns 10% of the
+    // settlement. Every buyer becomes a salesperson.
+    const ref = referralOf(req);
+    const amount = req.x402?.requirements?.amount ?? req.x402?.result?.amount ?? '1000';
+    if (ref) creditReferral(ref, amount, req.x402?.requirements?.asset);
     logger.debug(`Serving paid sanitize (x402 v${req.x402?.paymentHeaderVersion ?? '?'} client)`);
     res.json({
       success: true,
