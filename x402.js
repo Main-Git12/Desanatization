@@ -319,7 +319,7 @@ export function buildRoutes(config, scheme) {
   return {
     [`GET ${config.resource.path}`]: makeRoute(discoverableGet),
     [`POST ${config.resource.path}`]: makeRoute(discoverablePost),
-  // Batch: one settlement, up to 10 texts — the volume buyer's route.
+    // Batch: one settlement, up to 10 texts — the volume buyer's route.
     'POST /api/sanitize/batch': makeRoute(discoverableBatch),
     // A2A proxy: pay us to call a peer service on your behalf.
     'POST /api/proxy': makeRoute({
@@ -348,8 +348,11 @@ export function buildRoutes(config, scheme) {
       bodyType: 'json',
       description: 'A2A peer discovery: discover x402-enabled agents matching a query. POST { "query": "pii sanitization" }.',
       input: { query: 'pii sanitization' },
-      inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
-      output: { example: { peers: ['https://peer1.example', 'https://peer2.example'] }, schema: { type: 'object', properties: { peers: { type: 'array', items: { type: 'string' } } } } },
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      output: {
+        example: { peers: ['https://peer1.example', 'https://peer2.example'] },
+        schema: { type: 'object', properties: { peers: { type: 'array', items: { type: 'string' } } } },
+      },
     }),
   };
 }
