@@ -118,11 +118,39 @@ export function buildRoutes(config, scheme) {
       },
       required: ['text'],
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        clean: { type: 'string', description: 'Sanitized text' },
-        redactions: { type: 'object', description: 'Counts per redaction class' },
+    output: {
+      example: {
+        success: true,
+        clean: 'Contact me at [redacted-email]',
+        redactions: { emails: 1, phones: 0, ssns: 0, cards: 0, secrets: 0, urlTokens: 0 },
+        inputChars: 27,
+        outputChars: 27,
+        requestId: '550e8400-e29b-41d4-a716-446655440000',
+        timestamp: '2026-09-16T07:17:00.000Z',
+      },
+      schema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          clean: { type: 'string', description: 'Sanitized text' },
+          redactions: {
+            type: 'object',
+            properties: {
+              emails: { type: 'integer' },
+              phones: { type: 'integer' },
+              ssns: { type: 'integer' },
+              cards: { type: 'integer' },
+              secrets: { type: 'integer' },
+              urlTokens: { type: 'integer' },
+            },
+            description: 'Counts per redaction class',
+          },
+          inputChars: { type: 'integer' },
+          outputChars: { type: 'integer' },
+          requestId: { type: 'string' },
+          timestamp: { type: 'string' },
+        },
+        required: ['success', 'clean', 'redactions'],
       },
     },
   });
@@ -140,11 +168,39 @@ export function buildRoutes(config, scheme) {
         text: { type: 'string', description: 'Text to sanitize' },
       },
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        clean: { type: 'string', description: 'Sanitized text' },
-        redactions: { type: 'object', description: 'Counts per redaction class' },
+    output: {
+      example: {
+        success: true,
+        clean: 'Contact me at [redacted-email]',
+        redactions: { emails: 1, phones: 0, ssns: 0, cards: 0, secrets: 0, urlTokens: 0 },
+        inputChars: 27,
+        outputChars: 27,
+        requestId: '550e8400-e29b-41d4-a716-446655440000',
+        timestamp: '2026-09-16T07:17:00.000Z',
+      },
+      schema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          clean: { type: 'string', description: 'Sanitized text' },
+          redactions: {
+            type: 'object',
+            properties: {
+              emails: { type: 'integer' },
+              phones: { type: 'integer' },
+              ssns: { type: 'integer' },
+              cards: { type: 'integer' },
+              secrets: { type: 'integer' },
+              urlTokens: { type: 'integer' },
+            },
+            description: 'Counts per redaction class',
+          },
+          inputChars: { type: 'integer' },
+          outputChars: { type: 'integer' },
+          requestId: { type: 'string' },
+          timestamp: { type: 'string' },
+        },
+        required: ['success', 'clean', 'redactions'],
       },
     },
   });
@@ -173,21 +229,44 @@ export function buildRoutes(config, scheme) {
       },
       required: ['items'],
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        count: { type: 'integer', description: 'Number of texts sanitized' },
-        results: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              clean: { type: 'string' },
-              redactions: { type: 'object' },
+    output: {
+      example: {
+        success: true,
+        count: 2,
+        results: [
+          {
+            clean: 'Contact me at [redacted-email]',
+            redactions: { emails: 1, phones: 0, ssns: 0, cards: 0, secrets: 0, urlTokens: 0 },
+          },
+          {
+            clean: 'Call [redacted-phone]',
+            redactions: { emails: 0, phones: 1, ssns: 0, cards: 0, secrets: 0, urlTokens: 0 },
+          },
+        ],
+        totalRedactions: { emails: 1, phones: 1, ssns: 0, cards: 0, secrets: 0, urlTokens: 0 },
+        requestId: '550e8400-e29b-41d4-a716-446655440000',
+        timestamp: '2026-09-16T07:17:00.000Z',
+      },
+      schema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          count: { type: 'integer', description: 'Number of texts sanitized' },
+          results: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                clean: { type: 'string' },
+                redactions: { type: 'object' },
+              },
             },
           },
+          totalRedactions: { type: 'object', description: 'Redaction counts summed across all items' },
+          requestId: { type: 'string' },
+          timestamp: { type: 'string' },
         },
-        totalRedactions: { type: 'object', description: 'Redaction counts summed across all items' },
+        required: ['success', 'count', 'results', 'totalRedactions'],
       },
     },
   });
