@@ -9,6 +9,9 @@
 /** Public x402 testnet facilitator. Works with eip155:84532 out of the box. */
 export const DEFAULT_FACILITATOR_URL = 'https://x402.org/facilitator';
 
+/** Valid notification transports, validated against NOTIFICATION_TRANSPORT. */
+export const NOTIFICATION_TRANSPORTS = Object.freeze(['none', 'webhook', 'smtp']);
+
 /** EIP-55-agnostic EVM address check. */
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 
@@ -369,10 +372,51 @@ export function loadConfig(env = process.env) {
       publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
       intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
-            statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
+      statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
       agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
+      // Task agent self-review cadence (0 = off). The agent audits its own
+      // recent outcomes and prunes dead skills on this interval, so the
+      // library improves while the service is idle.
+      reviewIntervalMs: readInt(
+        env.AGENT_REVIEW_INTERVAL_MS,
+        'AGENT_REVIEW_INTERVAL_MS',
+        { min: 0 },
+        problems,
+        0,
+      ),
+    },
+
+    // Outbound notifications: durable, operator-facing events (first purchase,
+    // settlement, insights). Dependency-free — every transport is plain HTTP.
+    notifications: {
+      transport: String(env.NOTIFICATION_TRANSPORT || 'none').trim().toLowerCase(),
+      webhookUrl: String(env.NOTIFICATION_WEBHOOK_URL || '').trim() || undefined,
+      smtpUrl: String(env.NOTIFICATION_SMTP_URL || '').trim() || undefined,
+      from: String(env.NOTIFICATION_FROM || '').trim() || undefined,
+      to: String(env.NOTIFICATION_TO || '').trim() || undefined,
+      statePath: String(env.NOTIFICATION_STATE_PATH || '').trim() || undefined,
     },
   };
+
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+
+  // Outbound notifications: validate the transport choice before it reaches
+  // the notifier, so a typo fails at boot instead of silently logging nothing.
+  if (!NOTIFICATION_TRANSPORTS.includes(config.notifications.transport)) {
+    problems.push(
+      `NOTIFICATION_TRANSPORT must be one of ${NOTIFICATION_TRANSPORTS.join(', ')} (received "${config.notifications.transport}")`,
+    );
+  }
+  if (config.notifications.transport === 'webhook' && !config.notifications.webhookUrl) {
+    problems.push('NOTIFICATION_TRANSPORT=webhook requires NOTIFICATION_WEBHOOK_URL');
+  }
+  if (config.notifications.transport === 'smtp' && (!config.notifications.smtpUrl || !config.notifications.from || !config.notifications.to)) {
+    problems.push(
+      'NOTIFICATION_TRANSPORT=smtp requires NOTIFICATION_SMTP_URL, NOTIFICATION_FROM and NOTIFICATION_TO',
+    );
+  }
 
   if (problems.length > 0) {
     throw new ConfigError(problems);

@@ -117,6 +117,13 @@ process exits rather than serving traffic that can never be paid.
 | `SYNC_FACILITATOR_ON_START` | no | `true` | Fetch supported kinds at boot |
 | `STRICT_STARTUP` | no | `true` in production | Exit at boot if the facilitator preflight fails |
 | `METRICS_TOKEN` | no | – | Bearer token required by `GET /api/metrics` |
+| `AGENT_REVIEW_INTERVAL_MS` | no | `0` | Task agent self-review cadence (0 = off) |
+| `NOTIFICATION_TRANSPORT` | no | `none` | `none` \| `webhook` \| `smtp` |
+| `NOTIFICATION_WEBHOOK_URL` | no | – | Webhook channel: POST JSON events here |
+| `NOTIFICATION_SMTP_URL` | no | – | SMTP channel: HTTP-to-email bridge URL |
+| `NOTIFICATION_FROM` | no | – | SMTP channel: sender address |
+| `NOTIFICATION_TO` | no | – | SMTP channel: recipient (e.g. `andrew.peal12@gmail.com`) |
+| `NOTIFICATION_STATE_PATH` | no | – | Where the first-purchase milestone is persisted |
 
 Legacy x402 v1 network names (`base`, `base-sepolia`, …) are accepted and
 translated to CAIP-2 with a warning.
@@ -198,6 +205,41 @@ docker run -p 3000:3000 --env-file .env desanatization
 | Payments not arriving | Confirm `PAY_TO_ADDRESS` is your wallet, that the facilitator settles on the same `NETWORK`, and check `/api/metrics` → `settledPayments` |
 | Boot exits with `Invalid configuration` | Every problem is listed with the exact variable name |
 | Payment succeeds but no receipt | A proxy is stripping the `PAYMENT-RESPONSE` header |
+
+## Notifications
+
+The server fires durable, operator-facing events through a dependency-free channel:
+
+- **First purchase** — fires exactly once, and is persisted so a restart never re-alerts on the same milestone. This is the "the service is earning" signal.
+- **Every settlement** — a JSON event envelope per paid call.
+- **Health degradation** — fired by the self-healing supervisor when the paywall drops.
+
+Transports are plain HTTP, so no SMTP library is needed:
+
+```bash
+# Webhook: POST a JSON event envelope to your hook.
+NOTIFICATION_TRANSPORT=webhook
+NOTIFICATION_WEBHOOK_URL=https://your-hook.example/notify
+
+# SMTP: POST a JSON email envelope to an HTTP-to-email bridge
+# (SendGrid v3, Mailgun, Resend, or your own).
+NOTIFICATION_TRANSPORT=smtp
+NOTIFICATION_SMTP_URL=https://api.example.com/v3/mail/send
+NOTIFICATION_FROM=you@example.com
+NOTIFICATION_TO=andrew.peal12@gmail.com
+```
+
+Status is exposed at `GET /api/notifications` (token-guarded).
+
+## Self-healing
+
+A supervisor watches paywall readiness on a 30s loop. On degradation it:
+
+1. nudges the growth engine to skip its next cycle (reversible),
+2. fires the notification channel,
+3. surfaces in `GET /api/health/deep`.
+
+It never touches the facilitator or the payment path directly — every action is observable and reversible.
 
 ## Security notes
 

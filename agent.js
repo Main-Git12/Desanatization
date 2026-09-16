@@ -155,13 +155,19 @@ function goalKey(goal) {
   return `agent:goal:${goal.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48)}`;
 }
 
-export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
+export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath, reviewIntervalMs = 0 }) {
   /** @type {Map<string, object>} goalKey -> learned skill */
   const skills = new Map();
   let tasksRun = 0;
   let tasksSucceeded = 0;
   let skillReplays = 0;
   let skillReplaysSucceeded = 0;
+  /** Total revenue the agent's learned skills have helped produce (atomic units). */
+  let skillRevenue = 0;
+  /** Rolling record of the last few outcomes, for self-review. */
+  const recentOutcomes = [];
+  /** @type {NodeJS.Timeout|undefined} */
+  let reviewTimer;
 
   // Durable learning: restore the skill library + counters from disk so the
   // agent "remembers" what it learned before a restart. Best-effort — a
@@ -174,6 +180,7 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
       tasksSucceeded = data.tasksSucceeded ?? 0;
       skillReplays = data.skillReplays ?? 0;
       skillReplaysSucceeded = data.skillReplaysSucceeded ?? 0;
+      skillRevenue = data.skillRevenue ?? 0;
       logger.info(`Agent: restored ${skills.size} skills from ${statePath} (tasksRun ${tasksRun}).`);
     } catch {
       logger.info('Agent: no restorable skill state — starting a fresh ledger.');
@@ -197,6 +204,7 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
           tasksSucceeded,
           skillReplays,
           skillReplaysSucceeded,
+          skillRevenue,
           skills: [...skills.values()],
         }),
       );
@@ -204,6 +212,59 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
     } catch (error) {
       logger.warn(`Agent: could not persist skills (${error.message}) — continuing in memory.`);
     }
+  }
+
+  /**
+   * Self-review: the agent audits its own recent outcomes and prunes skills
+   * that are never used or always fail. This is the "evolve its processes"
+   * loop — it runs on a timer, independently of any incoming task, so the
+   * library improves while the service is idle.
+   *
+   * @returns {object} Review summary
+   */
+  function runSelfReview() {
+    const window = recentOutcomes.slice(-20);
+    const total = window.length;
+    const succeeded = window.filter((o) => o.ok).length;
+    const replayed = window.filter((o) => o.via.startsWith('skill')).length;
+    const fresh = window.filter((o) => o.via.startsWith('skill-learned')).length;
+
+    // Prune skills that have never been replayed after 10+ tasks and are not
+    // the most recent success — they are dead weight in the library.
+    const stale = [...skills.values()].filter(
+      (s) => (s.uses ?? 0) === 0 && s.recordedAt < new Date(Date.now() - 7 * 24 * 3600_000).toISOString(),
+    );
+    for (const s of stale) skills.delete(s.goalKey);
+
+    const summary = {
+      window: total,
+      succeeded,
+      successRate: total ? Number((succeeded / total).toFixed(3)) : 0,
+      replayed,
+      learned: fresh,
+      skills: skills.size,
+      pruned: stale.length,
+      skillRevenue,
+    };
+    logger.info(`Agent self-review: ${JSON.stringify(summary)}`);
+    return summary;
+  }
+
+  /**
+   * Start the periodic self-review timer. Best-effort — a missing interval
+   * means the agent learns only on demand, which is still correct.
+   */
+  function startReview() {
+    if (!reviewIntervalMs) return;
+    if (reviewTimer) return;
+    reviewTimer = setInterval(() => {
+      try {
+        runSelfReview();
+      } catch (error) {
+        logger.warn(`Agent self-review failed: ${error.message}`);
+      }
+    }, reviewIntervalMs);
+    reviewTimer.unref?.();
   }
 
   /**
@@ -265,6 +326,12 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
     const key = goalKey(goal);
     const skill = skills.get(key);
 
+    // Revenue attribution: when a task carries a settlement amount, credit it
+    // to the skill that produced it. That is how the library learns which
+    // goal shapes are worth replaying — not just which succeed, but which
+    // earn.
+    const revenue = Number(task?.revenueAtomic ?? 0);
+
     if (skill && !skill.degraded) {
       skillReplays += 1;
       const replay = await execute(goal, skill.plan, maxSteps);
@@ -273,6 +340,12 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
         tasksSucceeded += 1; // a replayed success is still a succeeded task
         skill.uses += 1;
         skill.lastUsedAt = new Date().toISOString();
+        if (revenue > 0) {
+          skill.revenue = (skill.revenue ?? 0) + revenue;
+          skillRevenue += revenue;
+        }
+        const outcome = { ok: true, via: 'skill-replay', goal: key, revenue };
+        recentOutcomes.push(outcome);
         saveSkills();
         return { ok: true, goal, via: 'skill-replay', steps: replay.trace.length, trace: replay.trace };
       }
@@ -292,18 +365,26 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
         existing.uses += 1;
         existing.degraded = false;
         existing.repairedAt = new Date().toISOString();
+        if (revenue > 0) {
+          existing.revenue = (existing.revenue ?? 0) + revenue;
+          skillRevenue += revenue;
+        }
       } else {
         skills.set(key, {
           goalKey: key,
           plan: fresh.trace.map((t) => ({ tool: t.tool, args: t.args })),
           recordedAt: new Date().toISOString(),
           uses: 0,
+          revenue: revenue > 0 ? revenue : 0,
         });
       }
+      const outcome = { ok: true, via: existing ? 'skill-repaired' : 'skill-learned', goal: key, revenue };
+      recentOutcomes.push(outcome);
       saveSkills();
       return { ok: true, goal, via: existing ? 'skill-repaired' : 'skill-learned', steps: fresh.trace.length, trace: fresh.trace };
     }
 
+    recentOutcomes.push({ ok: false, via: skill ? 'skill-drift-then-failed' : 'failed', goal: key, revenue });
     saveSkills();
     return {
       ok: false,
@@ -326,10 +407,12 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
       tasksSucceeded,
       skillReplays,
       skillReplaysSucceeded,
+      skillRevenue,
       skills: [...skills.values()].map((s) => ({
         goal: s.goalKey,
         recordedAt: s.recordedAt,
         uses: s.uses,
+        revenue: s.revenue ?? 0,
         planLength: s.plan.length,
         degraded: Boolean(s.degraded),
         repaired: Boolean(s.repairedAt),
@@ -337,7 +420,11 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
     };
   }
 
-  return { runTask, getSkills, listSkills: () => [...skills.values()] };
+  // Kick off the periodic self-review when configured. Best-effort: a missing
+  // interval means the agent learns only on demand, which is still correct.
+  startReview();
+
+  return { runTask, getSkills, listSkills: () => [...skills.values()], runSelfReview };
 }
 
 

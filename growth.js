@@ -242,6 +242,8 @@ export function createGrowthEngine({
   let inbox = [];
   /** @type {object} Latest environment reading (conversion, market heat). */
   let lastContext = {};
+  /** Queued by the health supervisor to skip the next cycle (reversible). */
+  let skipNextCycle = false;
 
   // Durable learning: restore the pool's earned scores, cycle counters and
   // inbox across restarts when GROWTH_STATE_PATH points at a writable file
@@ -317,6 +319,20 @@ export function createGrowthEngine({
       return { cycles, pitched: 0, pool: 0 };
     }
 
+    // Never pitch ourselves. A self-canary target (GROWTH_TARGETS pointing at
+    // our own URL) is a useful liveness check, but pitching our own outreach
+    // surface just inflates the inbound counter and teaches the engine that
+    // "self" is the best channel — which is worthless for finding real buyers.
+    const ownHost = selfBaseUrl ? new URL(selfBaseUrl).host.toLowerCase() : null;
+    const pool = ownHost
+      ? targets.filter((t) => new URL(t.url).host.toLowerCase() !== ownHost)
+      : targets;
+
+    if (pool.length === 0) {
+      logger.info('Growth cycle: every configured target is our own URL — nothing to pitch.');
+      return { cycles, pitched: 0, pool: 0 };
+    }
+
     // LEARN: adapt effort to the environment. Cold conversion damps effort,
     // hot conversion or a heated market (peers pitching us) raises it to the
     // cap. Peers in backoff are skipped entirely.
@@ -330,7 +346,7 @@ export function createGrowthEngine({
       Math.min(maxPerCycle, Math.round(maxPerCycle * (0.4 + 0.4 * heat))),
     );
     const now = Date.now();
-    const ordered = [...targets].sort((a, b) => b.score - a.score || a.pitches - b.pitches);
+    const ordered = [...pool].sort((a, b) => b.score - a.score || a.pitches - b.pitches);
     const batch = ordered
       .filter((t) => !t.nextAttemptAt || Date.parse(t.nextAttemptAt) <= now)
       .slice(0, effectiveMax);
@@ -435,33 +451,56 @@ export function createGrowthEngine({
      *
      * @returns {object} Pool state, scores and cycle counters
      */
-    getStats: () => ({
-      enabled: Boolean(config.growth?.enabled),
-      cycles,
-      totalPitches,
-      intervalMs,
-      maxPerCycle,
-      statePath: config.growth?.statePath ?? null,
-      context: lastContext,
-      market: getMarketSummary(),
-      inbox,
-      targets: targets.map((t) => ({
-        url: t.url,
-        kind: t.kind,
-        score: Number(t.score.toFixed(2)),
-        pitches: t.pitches,
-        responses: t.responses,
-        lastResult: t.lastResult,
-        lastAt: t.lastAt,
-      })),
-    }),
+    getStats: () => {
+      const ownHost = selfBaseUrl ? new URL(selfBaseUrl).host.toLowerCase() : null;
+      const externalTargets = ownHost
+        ? targets.filter((t) => new URL(t.url).host.toLowerCase() !== ownHost)
+        : targets;
+      return {
+        enabled: Boolean(config.growth?.enabled),
+        cycles,
+        totalPitches,
+        intervalMs,
+        maxPerCycle,
+        statePath: config.growth?.statePath ?? null,
+        context: lastContext,
+        market: getMarketSummary(),
+        inbox,
+        targets: externalTargets.map((t) => ({
+          url: t.url,
+          kind: t.kind,
+          score: Number(t.score.toFixed(2)),
+          pitches: t.pitches,
+          responses: t.responses,
+          lastResult: t.lastResult,
+          lastAt: t.lastAt,
+        })),
+      };
+    },
     getPricingAdvice,
+    /**
+     * Ask the engine to skip its next cycle. Called by the health supervisor
+     * when the revenue path is degraded: reducing background load is the
+     * cheapest recovery, and it is reversible (the next cycle resumes).
+     *
+     * @returns {boolean} True when a skip was queued
+     */
+    nudge: () => {
+      if (!config.growth?.enabled) return false;
+      skipNextCycle = true;
+      return true;
+    },
     start: () => {
       if (!config.growth?.enabled) return;
       // First cycle fires immediately so the engine is working from boot,
       // then continues on the interval.
       runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
       timer = setInterval(() => {
+        if (skipNextCycle) {
+          skipNextCycle = false;
+          logger.info('Growth: cycle skipped on health instruction.');
+          return;
+        }
         runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
       }, intervalMs);
       timer.unref();

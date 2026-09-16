@@ -9,6 +9,8 @@ import express from 'express';
 import { describeConfig } from './config.js';
 import { createGrowthEngine } from './growth.js';
 import { createTaskAgent } from './agent.js';
+import { createNotifier } from './notifications.js';
+import { createSupervisor } from './supervisor.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import {
   getInsights,
@@ -93,7 +95,22 @@ export function createApp({ config, logger, x402 }) {
 
   // Task agent: bounded autonomous goal pursuit with a learned skill library.
   // Exposed (token-guarded) at /api/agent/task and /api/agent/skills.
-    const taskAgent = createTaskAgent({ logger, statePath: config.growth?.agentStatePath });
+    const taskAgent = createTaskAgent({
+      logger,
+      statePath: config.growth?.agentStatePath,
+      reviewIntervalMs: config.growth?.reviewIntervalMs,
+    });
+
+  // Outbound notifications: durable, operator-facing events. Fires on first
+  // purchase (exactly once) and on every settlement; never blocks the revenue
+  // path or takes it down when its channel is misconfigured.
+  const notifier = createNotifier(config, logger);
+
+  // Self-healing supervisor: watches paywall readiness and, on degradation,
+  // nudges the growth engine off the revenue path and notifies the operator.
+  // It never touches the facilitator or the payment path directly.
+  const supervisor = createSupervisor({ logger, notifier, growthEngine, x402 });
+  supervisor.start();
 
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
@@ -113,20 +130,16 @@ export function createApp({ config, logger, x402 }) {
   // without querying the chain.
   x402.resourceServer
     .onAfterSettle(async ({ requirements, result }) => {
-      trackPayment({
-        amount: result?.amount ?? requirements?.amount ?? '0',
-        asset: requirements?.asset ?? 'unknown',
-        payer: result?.payer,
-        network: result?.network ?? requirements?.network,
-        transaction: result?.transaction,
-      });
+      const amount = result?.amount ?? requirements?.amount ?? '0';
+      const asset = requirements?.asset ?? 'unknown';
+      const payer = result?.payer;
+      const network = result?.network ?? requirements?.network;
+      const transaction = result?.transaction;
+      trackPayment({ amount, asset, payer, network, transaction });
+      // First-purchase milestone fires exactly once, durably, through the
+      // configured channel — the revenue-path is never blocked by it.
+      await notifier.notifyFirstPurchase({ amount, asset, payer, network, transaction });
     })
-    .onSettleFailure(async ({ error }) => {
-      trackPaymentFailure(`settle error: ${error?.message ?? 'unknown'}`);
-    })
-    .onVerifyFailure(async ({ error, result }) => {
-      trackPaymentFailure(`verify failed: ${result?.invalidReason ?? error?.message ?? 'unknown'}`);
-    });
 
   // --- Public endpoints ---------------------------------------------------
   app.get('/', (req, res) => {
@@ -204,6 +217,21 @@ export function createApp({ config, logger, x402 }) {
     res.json({ ...getMetrics(), paywallReady: x402.isReady(), timestamp: new Date().toISOString() });
   });
 
+  // Deep health: liveness + the auxiliary subsystems (notifications, agent
+  // learning) so an operator can tell at a glance whether the automation
+  // surfaces are armed, without opening every individual endpoint.
+  app.get('/api/health/deep', requireMetricsToken(config), (req, res) => {
+    res.json({
+      status: 'ok',
+      uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
+      paywallReady: x402.isReady(),
+      notifications: notifier.getState(),
+      supervisor: supervisor.snapshot(),
+      agent: taskAgent.getSkills(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Growth loop: funnel + conversion signals. Same guard as /metrics — this
   // is how pricing experiments get scored, so it stays private by default.
   app.get('/api/insights', requireMetricsToken(config), (req, res) => {
@@ -244,6 +272,20 @@ export function createApp({ config, logger, x402 }) {
   // The agent's growth ledger: skills learned, replays, repairs, degradations.
   app.get('/api/agent/skills', requireMetricsToken(config), (req, res) => {
     res.json({ ...taskAgent.getSkills(), timestamp: new Date().toISOString() });
+  });
+
+  // Agent self-review: audit recent outcomes and prune dead skills. Runs on a
+  // timer by default; this endpoint lets an operator trigger it on demand.
+  app.post('/api/agent/review', requireMetricsToken(config), (req, res) => {
+    const summary = taskAgent.runSelfReview();
+    res.json({ ...summary, triggered: 'manual', timestamp: new Date().toISOString() });
+  });
+
+  // Notification channel status: is the first-purchase milestone configured and
+  // has it already fired? Read-only, token-guarded like the other operator
+  // surfaces — it reveals whether the alerting channel is wired up.
+  app.get('/api/notifications', requireMetricsToken(config), (req, res) => {
+    res.json({ ...notifier.getState(), timestamp: new Date().toISOString() });
   });
 
   // Inbound outreach: peers pitch us back at the same surface our engine
@@ -489,7 +531,10 @@ export function createApp({ config, logger, x402 }) {
   return {
     app,
     growthEngine,
+    notifier,
+    supervisor,
     dispose: () => {
+      supervisor.stop();
       limiter.dispose?.();
       x402.stopRetries?.();
       growthEngine.stop?.();

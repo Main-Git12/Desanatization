@@ -73,14 +73,18 @@ async function main() {
   }
 
   const x402 = createX402(config, logger);
-  const { app, dispose, growthEngine } = createApp({ config, logger, x402 });
+  const { app, dispose, growthEngine, notifier, supervisor } = createApp({ config, logger, x402 });
 
   const server = app.listen(config.port, config.host, () => {
     logger.info(`HTTP server listening on ${config.host}:${config.port}`);
     logger.info(`Paid endpoint: GET ${config.resource.path} for ${JSON.stringify(config.price)} on ${config.network}`);
   });
 
-  // Outbound growth loop: disabled unless GROWTH_ENABLED=true.
+  // Outbound growth loop: growthEngine.start() fires the first cycle at boot
+  // (then the interval takes over). A cold engine that waits 6h for its first
+  // probe learns nothing for hours — the goal is agents finding us within
+  // minutes of deploy. start() owns the boot-fire; nothing here calls it
+  // again, or the engine would run cycle 1 twice.
   growthEngine.start();
 
   // Railway terminates TLS and forwards; keep sockets from idling forever.
@@ -140,13 +144,6 @@ async function main() {
 
     logger.warn('Continuing to serve; initialization will be retried in the background.');
     x402.scheduleRetry();
-  }
-
-      // Fire the first growth cycle at boot (then the interval in start() takes
-  // over). A cold engine that waits 6h for its first probe learns nothing for
-  // hours — the goal is agents finding us within minutes of deploy.
-  if (config.growth?.enabled) {
-    growthEngine.runCycle().catch((error) => logger.warn(`First growth cycle failed: ${error.message}`));
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));

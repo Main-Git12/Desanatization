@@ -361,33 +361,73 @@ describe('outbound growth engine', () => {
     }
   });
 
-  test('closed loop: our engine pitches our own /api/outreach and it lands', async () => {
+  test('closed loop: our engine pitches a peer outreach surface and it lands', async () => {
     resetMetrics();
     const server = await startTestServer({ env: { METRICS_TOKEN: 'loop-secret' } });
     try {
-      const { createGrowthEngine } = await import('../growth.js');
-      const engine = createGrowthEngine({
-        config: { growth: { targets: JSON.stringify([{ url: server.baseUrl, kind: 'self-test' }]) } },
-        logger: quietLogger,
-        selfBaseUrl: server.baseUrl,
+      // A separate peer that exposes the same outreach surface our engine
+      // pitches. Pitching our own server is now excluded (a self-canary
+      // inflates the inbound counter and teaches the engine nothing), so the
+      // peer is the honest recipient here.
+      let peerInbound = 0;
+      const peer = http.createServer((req, res) => {
+        // probeAndPitch probes the root first; a 200 keeps the peer alive for
+        // the pitch step. The body mentions x402 so the fingerprinting path
+        // treats it as an x402 peer.
+        if (req.method === 'GET' && req.url === '/') {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('x402 service — see /llms.txt');
+        } else if (req.method === 'POST' && req.url === '/api/outreach') {
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          req.on('end', () => {
+            peerInbound += 1;
+            res.writeHead(202, { 'Content-Type': 'application/json' });
+            res.end('{}');
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
       });
-      const summary = await engine.runCycle();
-      assert.equal(summary.pitched, 1, 'our own outreach surface must accept the pitch');
+      await new Promise((resolve) => peer.listen(0, '127.0.0.1', resolve));
+      const peerUrl = `http://127.0.0.1:${peer.address().port}`;
+      try {
+        const { createGrowthEngine } = await import('../growth.js');
+        const engine = createGrowthEngine({
+          config: { growth: { targets: JSON.stringify([{ url: peerUrl, kind: 'peer' }]) } },
+          logger: quietLogger,
+          selfBaseUrl: server.baseUrl,
+        });
+        const summary = await engine.runCycle();
+        assert.equal(summary.pitched, 1, 'the peer outreach surface must accept the pitch');
 
-      const insights = await (await server.fetch('/api/insights', {
-        headers: { Authorization: 'Bearer loop-secret' },
-      })).json();
-      assert.equal(insights.funnel.inboundPitch, 1, 'inbound pitch counted in the funnel');
+        // The peer received exactly one inbound pitch
+        assert.equal(peerInbound, 1, 'peer received the pitch');
 
-      const growth = await (await server.fetch('/api/growth', {
-        headers: { Authorization: 'Bearer loop-secret' },
-      })).json();
-      assert.equal(growth.inbox.length, 1);
-      assert.equal(growth.inbox[0].type, 'x402-service-pitch');
-      assert.match(growth.inbox[0].from, /^http/);
+        // The engine learned from the interaction: target scored as pitched
+        const stats = engine.getStats();
+        assert.equal(stats.targets.length, 1, 'engine tracks the peer target');
+        assert.equal(stats.targets[0].lastResult, 'pitched', 'target marked as pitched');
+        assert.ok(stats.targets[0].score >= 1, 'score increased after successful pitch');
+      } finally {
+        peer.close();
+      }
     } finally {
       await server.close();
     }
+  });
+
+  test('the engine never pitches its own URL (self-exclusion)', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const engine = createGrowthEngine({
+      config: { growth: { targets: JSON.stringify([{ url: 'https://self.example', kind: 'self-test' }]) } },
+      logger: quietLogger,
+      selfBaseUrl: 'https://self.example',
+    });
+    const summary = await engine.runCycle();
+    assert.equal(summary.pitched, 0, 'our own URL must not be pitched');
+    assert.equal(summary.pool, 0, 'our own URL must be excluded from the pool');
   });
 
   test('POST /api/outreach rejects malformed pitches', async () => {
