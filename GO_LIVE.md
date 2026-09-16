@@ -53,6 +53,8 @@ FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402
 FACILITATOR_AUTH_HEADERS={"X-CDP-API-KEY-ID":"<id>","X-CDP-API-KEY-SECRET":"<secret>"}
 NODE_ENV=production
 STRICT_STARTUP=true
+# Then gate the flip before opening traffic (the gate must authenticate to CDP too):
+#   PREFLIGHT_FACILITATOR_AUTH_HEADERS='{"X-CDP-API-KEY-ID":"<id>","X-CDP-API-KEY-SECRET":"<secret>"}' npm run preflight -- https://<your-app>
 ```
 
 Notes:

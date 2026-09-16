@@ -120,13 +120,33 @@ if (headerValue) {
 }
 
 // --- 3. Facilitator supports what we advertise --------------------------------
+// CDP (and other keyed facilitators) require auth even on /supported, so the
+// gate accepts the same JSON header object the runtime uses.
 const facilitatorUrl = facilitatorOverride ?? KNOWN_FACILITATORS[network ?? ''];
 if (facilitatorUrl) {
-  const supported = await fetchSafe(`${facilitatorUrl.replace(/\/+$/, '')}/supported`);
+  /** @type {Record<string, string>} */
+  let authHeaders = {};
+  const rawHeaders = process.env.PREFLIGHT_FACILITATOR_AUTH_HEADERS;
+  if (rawHeaders) {
+    try {
+      const parsed = JSON.parse(rawHeaders);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string') authHeaders[k] = v;
+        }
+      }
+    } catch {
+      check('preflight auth headers parse', false, 'PREFLIGHT_FACILITATOR_AUTH_HEADERS is not valid JSON');
+    }
+  }
+  const supported = await fetchSafe(`${facilitatorUrl.replace(/\/+$/, '')}/supported`, {
+    headers: authHeaders,
+  });
   let supportsExact = false;
   if (supported.status === 200) {
     try {
-      const kinds = JSON.parse(supported.body)?.kinds ?? [];
+      const parsed = JSON.parse(supported.body);
+      const kinds = Array.isArray(parsed) ? parsed : (parsed.kinds ?? []);
       supportsExact = kinds.some((k) => k.scheme === 'exact' && k.network === network);
     } catch {
       /* treated as unsupported below */
