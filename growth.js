@@ -218,9 +218,15 @@ updated.responses = target.responses + (root.ok ? 1 : 0);
       : hasLlms
         ? 'reachable:no-x402'
         : 'reachable';
-  // Learning: peers that accept a pitch are worth the most; plain x402 peers
-  // less; silent or unreachable peers decay toward the back of the queue.
-  updated.score = pitched ? target.score + 2 : isX402Peer ? target.score + 0.5 : Math.max(0, target.score - 0.25);
+// Learning: peers that accept a pitch are worth the most; plain x402 peers
+    // less; silent or unreachable peers decay toward the back of the queue.
+    // A peer that is reachable but has no outreach surface gets NO boost —
+    // it is not a good channel, and boosting it just keeps it at the front.
+    updated.score = pitched
+      ? target.score + 2
+      : isX402Peer && pitched === false
+        ? Math.max(0, target.score - 0.1)
+        : Math.max(0, target.score - 0.25);
   return updated;
 }
 
@@ -355,7 +361,7 @@ export function createGrowthEngine({
       (lastContext.trialToPaidRate ?? 0) * 2 + (lastContext.inboundPitches >= 3 ? 0.5 : 0),
     );
     const effectiveMax = Math.max(
-      1,
+      2,
       Math.min(maxPerCycle, Math.round(maxPerCycle * (0.4 + 0.4 * heat))),
     );
     const now = Date.now();
