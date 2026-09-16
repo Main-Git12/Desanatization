@@ -199,9 +199,18 @@ export async function probeAndPitch(target, pitch) {
     }
   }
 
-  updated.responses = target.responses + (root.ok ? 1 : 0);
-  updated.failures = 0;
-  updated.nextAttemptAt = undefined;
+updated.responses = target.responses + (root.ok ? 1 : 0);
+    if (pitched) {
+      updated.failures = 0;
+      updated.nextAttemptAt = undefined;
+    } else {
+      // Reachable but no outreach surface — back off briefly so we don't
+      // hammer the same peer every cycle while the rest of the pool waits.
+      updated.failures = (target.failures ?? 0) + 1;
+      updated.nextAttemptAt = new Date(
+        Date.now() + Math.min(300_000, 30_000 * 2 ** updated.failures),
+      ).toISOString();
+    }
   updated.lastResult = pitched
     ? 'pitched'
     : isX402Peer
