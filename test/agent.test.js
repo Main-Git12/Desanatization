@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
 import http from 'node:http';
+import fsSync from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createTaskAgent, planNextStep, isStepSuccessful, MAX_STEPS_CAP } from '../agent.js';
 
 const quietLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -162,7 +165,50 @@ describe('growth engine adaptation', () => {
       pitches: 5,
       min: 0.0005,
     });
-    assert.equal(calm.differentiation, undefined);
+        assert.equal(calm.differentiation, undefined);
     assert.match(hot.differentiation, /Active market: 5 services/);
+  });
+});
+
+describe('task agent persistence', () => {
+  const quietLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+  test('learned skills + counters survive a restart (durable state)', async () => {
+    const { createTaskAgent } = await import('../agent.js');
+    const statePath = path.join(os.tmpdir(), `agent-state-${process.pid}-${Date.now()}.json`);
+    // First agent: learns a skill and writes it to disk.
+    const first = createTaskAgent({ logger: quietLogger, statePath });
+    const goal = 'sanitize: Mail jane@example.com about invoice 42';
+    const r1 = await first.runTask({ goal });
+    assert.equal(r1.ok, true);
+    assert.equal(r1.via, 'skill-learned');
+    assert.ok(fsSync.existsSync(statePath), 'state file must be written after learning');
+
+    // Second agent, same file: must restore the skill and REPLAY it (not re-learn).
+    const second = createTaskAgent({ logger: quietLogger, statePath });
+    const r2 = await second.runTask({ goal });
+    assert.equal(r2.ok, true);
+    assert.equal(r2.via, 'skill-replay', 'restored skill must be replayed, not re-learned');
+    const stats = second.getSkills();
+    assert.equal(stats.tasksRun, 2, 'run counter restored + incremented');
+    assert.equal(stats.tasksSucceeded, 2, 'success counter restored + incremented');
+    assert.equal(stats.skillReplays, 1, 'replay counter restored');
+    assert.equal(stats.skills.length, 1, 'skill library restored');
+    assert.equal(stats.skills[0].uses, 1, 'use count restored + incremented');
+    fsSync.rmSync(statePath, { force: true });
+  });
+
+  test('a missing or corrupt state file starts fresh instead of crashing', async () => {
+    const { createTaskAgent } = await import('../agent.js');
+    const missing = path.join(os.tmpdir(), `agent-missing-${process.pid}-${Date.now()}.json`);
+    const first = createTaskAgent({ logger: quietLogger, statePath: missing });
+    assert.equal(first.getSkills().tasksRun, 0, 'missing file -> fresh start, no crash');
+
+    const corrupt = path.join(os.tmpdir(), `agent-corrupt-${process.pid}-${Date.now()}.json`);
+    fsSync.writeFileSync(corrupt, '{ not valid json');
+    const second = createTaskAgent({ logger: quietLogger, statePath: corrupt });
+    assert.equal(second.getSkills().tasksRun, 0);
+    assert.equal(second.getSkills().skills.length, 0, 'corrupt file -> empty library, no crash');
+    fsSync.rmSync(corrupt, { force: true });
   });
 });

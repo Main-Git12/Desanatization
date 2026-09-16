@@ -92,7 +92,7 @@ export function createApp({ config, logger, x402 }) {
 
   // Task agent: bounded autonomous goal pursuit with a learned skill library.
   // Exposed (token-guarded) at /api/agent/task and /api/agent/skills.
-  const taskAgent = createTaskAgent({ logger });
+    const taskAgent = createTaskAgent({ logger, statePath: config.growth?.agentStatePath });
 
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);

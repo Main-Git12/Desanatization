@@ -15,6 +15,8 @@
 // ============================================================================
 
 import { sanitizeText } from './sanitize.js';
+import fsSync from 'node:fs';
+import { dirname } from 'node:path';
 
 export const MAX_STEPS_CAP = 16;
 
@@ -153,13 +155,56 @@ function goalKey(goal) {
   return `agent:goal:${goal.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48)}`;
 }
 
-export function createTaskAgent({ logger, defaultMaxSteps = 8 }) {
+export function createTaskAgent({ logger, defaultMaxSteps = 8, statePath }) {
   /** @type {Map<string, object>} goalKey -> learned skill */
   const skills = new Map();
   let tasksRun = 0;
   let tasksSucceeded = 0;
   let skillReplays = 0;
   let skillReplaysSucceeded = 0;
+
+  // Durable learning: restore the skill library + counters from disk so the
+  // agent "remembers" what it learned before a restart. Best-effort — a
+  // missing/corrupt file just starts fresh instead of crashing the boot.
+  if (statePath) {
+    try {
+      const data = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
+      for (const s of data.skills ?? []) if (s?.goalKey) skills.set(s.goalKey, s);
+      tasksRun = data.tasksRun ?? 0;
+      tasksSucceeded = data.tasksSucceeded ?? 0;
+      skillReplays = data.skillReplays ?? 0;
+      skillReplaysSucceeded = data.skillReplaysSucceeded ?? 0;
+      logger.info(`Agent: restored ${skills.size} skills from ${statePath} (tasksRun ${tasksRun}).`);
+    } catch {
+      logger.info('Agent: no restorable skill state — starting a fresh ledger.');
+    }
+  }
+
+  /**
+   * Persist the learned skill library + counters, best-effort and atomic
+   * (tmp + rename) so a crash mid-save never corrupts the file a future
+   * boot depends on.
+   */
+  function saveSkills() {
+    if (!statePath) return;
+    try {
+      fsSync.mkdirSync(dirname(statePath), { recursive: true });
+      fsSync.writeFileSync(
+        `${statePath}.tmp`,
+        JSON.stringify({
+          savedAt: new Date().toISOString(),
+          tasksRun,
+          tasksSucceeded,
+          skillReplays,
+          skillReplaysSucceeded,
+          skills: [...skills.values()],
+        }),
+      );
+      fsSync.renameSync(`${statePath}.tmp`, statePath);
+    } catch (error) {
+      logger.warn(`Agent: could not persist skills (${error.message}) — continuing in memory.`);
+    }
+  }
 
   /**
    * Execute one planned step, catching tool explosions into a failed result.
@@ -228,6 +273,7 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8 }) {
         tasksSucceeded += 1; // a replayed success is still a succeeded task
         skill.uses += 1;
         skill.lastUsedAt = new Date().toISOString();
+        saveSkills();
         return { ok: true, goal, via: 'skill-replay', steps: replay.trace.length, trace: replay.trace };
       }
       // Environment drifted: the remembered plan no longer holds. Mark it,
@@ -254,9 +300,11 @@ export function createTaskAgent({ logger, defaultMaxSteps = 8 }) {
           uses: 0,
         });
       }
+      saveSkills();
       return { ok: true, goal, via: existing ? 'skill-repaired' : 'skill-learned', steps: fresh.trace.length, trace: fresh.trace };
     }
 
+    saveSkills();
     return {
       ok: false,
       goal,
