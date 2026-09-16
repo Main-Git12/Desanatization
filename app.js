@@ -13,6 +13,7 @@ import { createNotifier } from './notifications.js';
 import { createSupervisor } from './supervisor.js';
 import { createCorsMiddleware } from './middleware/cors.js';
 import {
+  creditReferral,
   getInsights,
   getMetrics,
   getRecentReceipts,
@@ -245,6 +246,7 @@ export function createApp({ config, logger, x402 }) {
     res.json({
       ...growthEngine.getStats(),
       pricingAdvice: growthEngine.getPricingAdvice(),
+      meta: growthEngine.getMetaState(),
       paywallReady: x402.isReady(),
       timestamp: new Date().toISOString(),
     });

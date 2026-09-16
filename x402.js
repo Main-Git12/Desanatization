@@ -360,6 +360,7 @@ export function createX402(config, logger, deps = {}) {
   const middleware = paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false);
 
   let ready = false;
+  let initAttempts = 0;
   /** @type {Error|null} */
   let initError = null;
   /** @type {Promise<void>|null} */
@@ -375,20 +376,19 @@ export function createX402(config, logger, deps = {}) {
   async function initialize() {
     if (inFlight) return inFlight;
 
+    initAttempts += 1;
     inFlight = (async () => {
       await resourceServer.initialize();
       ready = true;
       initError = null;
       const kinds = resourceServer.getSupportedKind(2, config.network, config.scheme);
       logger.info(
-        `x402 initialized — facilitator ${config.facilitator.url} supports ${config.scheme} on ${config.network}` +
+        `x402 initialized (attempt ${initAttempts}) — facilitator ${config.facilitator.url} supports ${config.scheme} on ${config.network}` +
           (kinds?.extra ? ` (extra: ${JSON.stringify(kinds.extra)})` : ''),
       );
     })()
       .catch((error) => {
         ready = false;
-        // The SDK collapses facilitator failures into "no supported payment
-        // kinds"; keep the root cause visible for production debugging.
         const causeMessage = error?.cause?.message ? ` Cause: ${error.cause.message}` : '';
         const wrapped = new Error(`${error.message}${causeMessage}`);
         wrapped.cause = error;
@@ -443,5 +443,6 @@ export function createX402(config, logger, deps = {}) {
     stopRetries,
     isReady: () => ready,
     lastInitializationError: () => initError,
+    initAttempts: () => initAttempts,
   };
 }

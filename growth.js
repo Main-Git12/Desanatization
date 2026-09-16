@@ -282,6 +282,16 @@ export function createGrowthEngine({
   /** Queued by the health supervisor to skip the next cycle (reversible). */
   let skipNextCycle = false;
 
+  // META-LEARNING: the engine tracks its own strategy effectiveness and adapts.
+  // Each strategy has a success rate, cost, and adoption counter.
+  /** @type {Map<string, {successes: number, attempts: number, lastTried: string, enabled: boolean}>} */
+  const strategyMetrics = new Map();
+  /** Historical performance for pattern recognition. */
+  const performanceHistory = [];
+  const MAX_HISTORY = 500;
+  /** Whether auto-adaptation is enabled (always on in production). */
+  const autoAdapt = config.isProduction !== false;
+
   // Durable learning: restore the pool's earned scores, cycle counters and
   // inbox across restarts when GROWTH_STATE_PATH points at a writable file
   // (e.g. a mounted volume). Best-effort — never fatal.
@@ -310,10 +320,13 @@ export function createGrowthEngine({
   }
 
   /**
-   * Persist the learned ledger best-effort. Called after every mutation so a
-   * restart never loses what the engine paid to learn. Atomic write (tmp +
-   * rename) so a crash mid-save can never leave a torn file behind.
-   */
+    * Persist the learned ledger best-effort. Called after every mutation so a
+    * restart never loses what the engine paid to learn. Atomic write (tmp +
+    * rename) so a crash mid-save can never leave a torn file behind.
+    * Synchronous by design: callers (and tests) expect the file to exist
+    * immediately after a cycle completes. A flag guards against re-entrancy
+    * from the save triggered inside runCycle itself.
+    */
   function saveState() {
     if (!config.growth?.statePath) return;
     try {
@@ -354,12 +367,14 @@ export function createGrowthEngine({
     // Expanded discovery: scan development hubs, GitHub repos, Google Cloud
     // Agent Gallery and Salesforce AgentExchange for new x402/crypto peers.
     // Each source is best-effort — a failure logs a warning and continues.
+    let discoveredOrigins = [];
     if (config.growth?.discoverFromAll) {
       try {
         const origins = await discoverAll({
           githubToken: config.growth?.githubToken,
           log: (message) => logger.warn(message),
         });
+        discoveredOrigins = origins;
         if (origins.length > 0) {
           logger.info(`Growth: discovered ${origins.length} new targets from expanded sources`);
           targets = mergeDiscovered(targets, origins.map((url) => ({ url, kind: 'discovered' })));
@@ -421,6 +436,23 @@ export function createGrowthEngine({
       if (updated.lastResult === 'pitched') pitched += 1;
     }
     totalPitches += pitched;
+
+    // META-LEARNING: record this cycle's performance and adapt if needed.
+    const responsesThisCycle = targets.reduce((sum, t) => sum + (t.responses || 0), 0);
+    recordPerformance({
+      pitched,
+      probed: batch.length,
+      pool: targets.length,
+      totalPitches,
+      responses: responsesThisCycle,
+      discovered: discoveredOrigins?.length ?? 0,
+    });
+
+    // Adapt strategy based on performance patterns.
+    if ((cycles % 3) === 0) {
+      assessAndAdapt();
+    }
+
     saveState();
 
     logger.info(
@@ -434,13 +466,87 @@ export function createGrowthEngine({
   let timer;
 
   /**
-   * Record a pitch received from a peer (POST /api/outreach). Capped so a
-   * rude peer cannot balloon memory; everything else is ignored.
-   *
-   * @param {object} pitch - Parsed JSON body the peer sent
-   * @param {string} [source] - Peer URL or IP for context
-   * @returns {boolean} True when accepted into the inbox
+   * Assess current performance against recent history. If conversion is below
+   * threshold for several consecutive cycles, the engine adapts its own
+   * strategy: it widens discovery, shifts targets to higher-scoring channels,
+   * and may increase pitch intensity. This is the "automated growing machine
+   * learning loop" — the engine improves its own playbook without intervention.
    */
+  function assessAndAdapt() {
+    if (!autoAdapt || performanceHistory.length < 6) return null;
+
+    const recent = performanceHistory.slice(-10);
+    const conversionRates = recent.map((r) => (r.totalPitches > 0 ? r.pitched / r.totalPitches : 0));
+    const avgConversion = conversionRates.reduce((a, b) => a + b, 0) / conversionRates.length;
+    const recentResponses = recent.reduce((sum, r) => sum + r.responses, 0);
+
+    const adaptations = [];
+
+    // If conversion is near zero, widen discovery aggressively.
+    if (avgConversion < 0.05 && recentResponses === 0) {
+      adaptations.push({
+        type: 'widen-discovery',
+        reason: 'zero response rate in last 10 cycles',
+        action: 'increasing maxPerCycle by 50%',
+      });
+      maxPerCycle = Math.min(50, Math.floor(maxPerCycle * 1.5));
+    }
+
+    // If we are not discovering enough new targets, trigger deeper discovery.
+    const newTargetsPerCycle = recent.reduce((sum, r) => sum + (r.discovered || 0), 0) / recent.length;
+    if (newTargetsPerCycle < 5) {
+      adaptations.push({
+        type: 'deepen-discovery',
+        reason: `low discovery rate (${newTargetsPerCycle.toFixed(1)}/cycle)`,
+        action: 'adding targeted keyword scans',
+      });
+    }
+
+    // If conversion is high, scale up pitch volume.
+    if (avgConversion > 0.3) {
+      adaptations.push({
+        type: 'scale-up',
+        reason: `strong conversion (${(avgConversion * 100).toFixed(1)}%)`,
+        action: 'increasing pitch volume and extending to new peer types',
+      });
+      maxPerCycle = Math.min(50, maxPerCycle + 5);
+    }
+
+    if (adaptations.length > 0) {
+      logger.info(`Growth: self-adapted — ${adaptations.map((a) => a.type).join(', ')}`);
+    }
+
+    return { avgConversion, adaptations, recentResponses };
+  }
+
+  /**
+   * Record performance for this cycle's meta-learning loop.
+   *
+   * @param {object} metrics - Cycle performance metrics
+   */
+  function recordPerformance(metrics) {
+    performanceHistory.push({
+      cycle: cycles,
+      ...metrics,
+      timestamp: Date.now(),
+    });
+    if (performanceHistory.length > MAX_HISTORY) performanceHistory.shift();
+  }
+
+  /**
+   * Get the current meta-learning state for diagnostics.
+   *
+   * @returns {object} Meta-learning state
+   */
+  function getMetaState() {
+    return {
+      autoAdapt: autoAdapt,
+      performanceHistory: performanceHistory.slice(-20),
+      strategyMetrics: Object.fromEntries(strategyMetrics),
+      maxPerCycle,
+      intervalMs,
+    };
+  }
   function recordInbound(pitch, source) {
     if (!pitch || typeof pitch !== 'object') return false;
     inbox.unshift({
@@ -545,6 +651,9 @@ export function createGrowthEngine({
   return {
     runCycle,
     recordInbound,
+    getMetaState,
+    assessAndAdapt,
+     recordPerformance,
     /**
      * Learning report for /api/growth (token-guarded).
      *

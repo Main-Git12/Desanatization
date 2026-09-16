@@ -125,15 +125,19 @@ export function validateQueryParams(allowedParams) {
  */
 export function handleBodyParseErrors(error, req, res, next) {
   if (error?.type === 'entity.parse.failed') {
+    logger.debug(`Malformed JSON body for ${req.method} ${req.path}`);
     return res.status(400).json({
       error: 'Malformed JSON body',
+      hint: 'Ensure the request body is valid JSON with Content-Type: application/json.',
       requestId: req.id,
       timestamp: new Date().toISOString(),
     });
   }
   if (error?.type === 'entity.too.large') {
+    logger.warn(`Request body too large for ${req.method} ${req.path}`);
     return res.status(413).json({
       error: 'Request body too large',
+      detail: 'Maximum body size is 64KB. For larger payloads, batch your requests.',
       requestId: req.id,
       timestamp: new Date().toISOString(),
     });

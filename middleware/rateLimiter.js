@@ -65,7 +65,7 @@ export function createRateLimiter(config = {}) {
     res.setHeader('X-RateLimit-Remaining', Math.max(0, settings.maxRequests - record.count));
     res.setHeader('X-RateLimit-Reset', Math.ceil((record.resetTime + settings.windowMs) / 1000));
 
-    if (record.count > settings.maxRequests) {
+    if (record.count > Math.max(1, settings.maxRequests)) {
       const retryAfter = Math.ceil((record.resetTime + settings.windowMs - now) / 1000);
       res.setHeader('Retry-After', retryAfter);
       logger.warn(`Rate limit exceeded for ${key} on ${req.method} ${req.path}`);
@@ -112,5 +112,7 @@ export function createPaymentRateLimiter(overrides = {}) {
  * @returns {void}
  */
 export function disposeRateLimiter(middleware) {
-  middleware?.dispose?.();
+  if (middleware?.dispose) {
+    middleware.dispose();
+  }
 }

@@ -112,8 +112,13 @@ export function trackRequests(loggerInstance = logger) {
 export function trackPayment({ amount, asset = 'unknown', payer, network, transaction } = {}) {
   metrics.settledPayments++;
   trackFunnel('paidCall');
+  const safeAmount = typeof amount === 'string' && /^\d+$/.test(amount) ? amount : '0';
   const key = `${asset}`;
-  metrics.revenueAtomicByAsset[key] = String(BigInt(metrics.revenueAtomicByAsset[key] || '0') + BigInt(amount || '0'));
+  try {
+    metrics.revenueAtomicByAsset[key] = String(BigInt(metrics.revenueAtomicByAsset[key] || '0') + BigInt(safeAmount));
+  } catch {
+    logger.warn(`Payment settled with non-numeric amount: ${amount}`);
+  }
   // Ring buffer of the last 20 receipts — the social proof feed.
   metrics.receipts.unshift({
     transaction: transaction || 'n/a',
