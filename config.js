@@ -331,7 +331,7 @@ export function loadConfig(env = process.env) {
 
     resource: {
       path: env.RESOURCE_PATH || '/api/resource',
-      description: env.RESOURCE_DESCRIPTION || 'Protected API Resource',
+       description: env.RESOURCE_DESCRIPTION || 'PII sanitization for AI agents',
       mimeType: env.RESOURCE_MIME_TYPE || 'application/json',
       serviceName: env.SERVICE_NAME || 'Desanatization',
     },
@@ -364,26 +364,33 @@ export function loadConfig(env = process.env) {
       maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 'RATE_LIMIT_MAX_REQUESTS', { min: 1 }, problems, 60),
     },
 
-    // Outbound growth engine: opt-in, capped, self-learning.
+    // Outbound growth engine: self-learning. Enabled by default in production so
+    // the service actively pitches peer x402 agents instead of waiting to be found.
     growth: {
-      enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, false),
+      enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, isProduction),
       targets: env.GROWTH_TARGETS,
       discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
-      publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
+      // Auto-detect public URL from hosting environment so the growth engine can
+      // advertise itself in pitches. Railway exposes RAILWAY_STATIC_URL; fall back
+      // to PUBLIC_URL; the growth engine in app.js falls back to localhost:port.
+      publicUrl: String(
+        env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || env.RAILWAY_STATIC_URL || '',
+      ).trim().replace(/\/+$/, '') || undefined,
       intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
       statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
       agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
-      // Task agent self-review cadence (0 = off). The agent audits its own
-      // recent outcomes and prunes dead skills on this interval, so the
-      // library improves while the service is idle.
-      reviewIntervalMs: readInt(
-        env.AGENT_REVIEW_INTERVAL_MS,
-        'AGENT_REVIEW_INTERVAL_MS',
-        { min: 0 },
-        problems,
-        0,
-      ),
+       // Task agent self-review cadence (0 = off). The agent audits its own
+       // recent outcomes and prunes dead skills on this interval, so the
+       // library improves while the service is idle. Enabled in production
+       // so the agent refines its outreach while the service runs.
+       reviewIntervalMs: readInt(
+         env.AGENT_REVIEW_INTERVAL_MS,
+         'AGENT_REVIEW_INTERVAL_MS',
+         { min: 0 },
+         problems,
+         isProduction ? 4 * 60 * 60_000 : 0,
+       ),
     },
 
     // Outbound notifications: durable, operator-facing events (first purchase,
