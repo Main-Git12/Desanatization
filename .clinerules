@@ -1,0 +1,117 @@
+# Desanatization — Cline project rules
+
+A production x402 (v2) payment-gated API server for AI agents. Node ESM, Express,
+no build step, no TypeScript. These rules describe how work is done **in this
+repo** — follow them over generic defaults.
+
+## Verify your work — never claim success without evidence
+
+- `npm run test` must pass before you report done. Run it; do not assume.
+- The suite is ~95 tests across ~22 suites. A drop in the count means you
+  silently disabled something — investigate, do not accept it.
+- Tests exercise the **real** SDK middleware and the **real** app factory with
+  only the facilitator stubbed (`test/support/stubFacilitator.js`). Keep it that
+  way: a mock of `@x402/*` would hide exactly the class of bug this suite exists
+  to catch.
+- Unit tests are green ≠ production is correct. When a change alters runtime
+  behaviour (boot sequence, persistence, env-driven config), verify the live
+  deployment too: `npm run verify:live` (see below).
+- If `node`/`git` are not on PATH on Windows, they live at
+  `C:\Program Files\nodejs` and `C:\Program Files\Git\cmd`.
+
+### The two live checks (use the right one)
+
+- `npm run preflight <url>` — **is it safe to send buyers?** Health, readiness,
+  the 402 challenge is internally consistent, the facilitator really supports the
+  advertised scheme+network, and the storefront answers. Run before go-live.
+- `npm run verify:live <url>` — **does the deployed build match source?** Asserts
+  runtime-only behaviour the unit suite cannot see (boot-fired growth cycle, warm
+  process, the agent actually replaying a learned skill). Run after deploying a
+  behavioural change.
+- Both accept `BASE_URL`, print `PASS`/`FAIL` lines, and exit non-zero on
+  failure. Token-guarded endpoints need `METRICS_TOKEN`; without it they SKIP
+  rather than fail. Follow this shape for any new live check.
+
+## Invariants — breaking these costs real money
+
+- **The x402 middleware is the single authority on payment.** It must be mounted
+  at the ROOT (`app.use(x402.middleware)`). Mounting it under a path prefix makes
+  Express strip the prefix from `req.path`, the SDK route matcher never fires,
+  and **every request is served unpaid**. There is a comment in `app.js`; do not
+  move it.
+- **Never charge for something you cannot settle.** If the facilitator preflight
+  has not succeeded, paid routes return 503 with `Retry-After` — not a 500, and
+  not a 402 the facilitator could never settle. `requirePaywallReady` owns this.
+- **Liveness must never depend on downstream.** `/health` stays 200 even when the
+  facilitator is unreachable, or an orchestrator restart-loops the deploy.
+  Readiness is `/ready` (503 until the facilitator sync succeeds).
+- **Only the SDK decides what is paid.** Add paywalled routes to `buildRoutes()`
+  in `x402.js` — never guard revenue by hand in a route handler.
+- **Unpaid 402s are not errors.** They are the product's front door; they must
+  not inflate `totalErrors` / the error rate.
+- **Config is validated at boot and frozen.** New env vars go through
+  `config.js` with validation, a sensible default, and — if they can leak — a
+  redaction entry in `describeConfig`. Never read `process.env` directly in
+  feature code.
+
+## Money-path discipline
+
+- Amounts are **integer strings in atomic units** (USDC is 6 decimals, so
+  `$0.001` → `'1000'`). Never introduce floating-point arithmetic on money.
+- Price resolution must never require a facilitator round trip; it resolves
+  against the scheme's local asset table.
+- `NETWORK` is a CAIP-2 id (`eip155:84532` Base Sepolia, `eip155:8453` Base
+  mainnet). Mainnet + testnet facilitator is an impossible config and is
+  rejected — do not "fix" that by relaxing the check.
+- Settlement metrics (`settledPayments`, `revenueAtomicByAsset`,
+  `failedPayments`) are on-chain-independent revenue truth. Wire new outcomes
+  through `middleware/monitoring.js`; do not invent a second accounting path.
+
+## Code style — match what is here
+
+- ESM with `import`/`export`; 2-space indent; single quotes; semicolons.
+- No TypeScript, no build step, no new runtime dependency unless genuinely
+  required. Run on Node >= 20.12 (CI uses 22).
+- **JSDoc on every exported symbol**: `@param` with types, `@returns`. Types are
+  expressed in JSDoc, not `.d.ts` files. This is consistent throughout — keep it.
+- Prose comments explain **why**, not what. Several carry hard-won prod lessons
+  (route mounting, retry loops, tokens stripping quotes). Do not delete them as
+  "noise" when refactoring nearby code.
+- Prefer small named functions and explicit error handling; comments and messages
+  read as sentences that tell the operator what to do next.
+- Keep secrets out of logs, responses and test fixtures. `describeConfig` is
+  asserted not to leak; extend it when you add credentials.
+
+## Tests — where they live and what they must prove
+
+- `test/*.test.js`, node:test + `node:assert/strict`. No test framework.
+- Boot servers only via `test/support/boot.js` (`startTestServer`) on an
+  ephemeral port, so tests never collide. Always `await server.close()` in
+  `finally`.
+- Test the **behaviour a buyer experiences**, not internal wiring. For the
+  payment flow that means: the 402 challenge contents, a signed payment
+  unlocking the resource, and the `PAYMENT-RESPONSE` receipt — end to end.
+- When you add a paid route, add a test that an unpaid request is paywalled and
+  that a settled one succeeds.
+- When you add a runtime behaviour, consider whether it also belongs in
+  `scripts/verify-live.mjs`. The two layers are deliberate.
+
+## Deployment
+
+- Railway. `.env` is only for local dev; production gets real env vars.
+- `Dockerfile` uses an explicit `COPY` list — **a new top-level source file must
+  be added there** or it will not exist in the image. This has already caused one
+  incident (`growth.js`).
+- Startup is strict in production: an impossible config fails the deploy loudly
+  rather than serving requests that can never be paid.
+
+## Working agreement
+
+- Make the **smallest change that fully solves the task**; do not refactor or
+  reformat working code that is not part of the fix.
+- Apply edits directly. Do not present file contents as a proposal when the task
+  was to change the file.
+- Read before you edit; use `grep_search` to locate symbols rather than reading
+  whole large files (`app.js` is 700+ lines).
+- Report what you verified and what you did not. Never state a result you did not
+  observe from a tool.
