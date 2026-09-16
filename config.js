@@ -331,7 +331,7 @@ export function loadConfig(env = process.env) {
 
     resource: {
       path: env.RESOURCE_PATH || '/api/resource',
-      description: env.RESOURCE_DESCRIPTION || 'Protected API Resource',
+       description: env.RESOURCE_DESCRIPTION || 'PII sanitization for AI agents',
       mimeType: env.RESOURCE_MIME_TYPE || 'application/json',
       serviceName: env.SERVICE_NAME || 'Desanatization',
     },
@@ -364,34 +364,57 @@ export function loadConfig(env = process.env) {
       maxRequests: readInt(env.RATE_LIMIT_MAX_REQUESTS, 'RATE_LIMIT_MAX_REQUESTS', { min: 1 }, problems, 60),
     },
 
-     // Outbound growth engine: opt-in, capped, self-learning.
-     growth: {
-       enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, false),
-       targets: env.GROWTH_TARGETS,
-       discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
-       // Expanded discovery: scan GitHub, Google Cloud Agent Gallery, and
-       // Salesforce AgentExchange for new x402/crypto/AI-agent peers.
-       discoverFromAll: readBool(
-         env.GROWTH_DISCOVER_FROM_ALL,
-         'GROWTH_DISCOVER_FROM_ALL',
-         problems,
-         true,
-       ),
-       githubToken: String(env.GITHUB_TOKEN || '').trim() || undefined,
-       publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
-       intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
-       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
-       statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
-       agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
+    // Outbound growth engine: self-learning. Enabled by default in production so
+    // the service actively pitches peer x402 agents instead of waiting to be found.
+    growth: {
+      enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, isProduction),
+      targets: env.GROWTH_TARGETS,
+      // Seed targets: well-known x402 agent networks and service aggregators.
+      // The engine discovers more peers from the CDP Bazaar and expanded sources
+      // every cycle, but starting with a warm list gets the first pitches out
+      // within minutes, not hours.
+      seedTargets: isProduction
+        ? JSON.stringify([
+            { url: 'https://x402.ottoai.services', kind: 'known-peer' },
+            { url: 'https://agno.com', kind: 'framework' },
+            { url: 'https://langchain.com', kind: 'framework' },
+            { url: 'https://api.anthropic.com', kind: 'provider' },
+            { url: 'https://openrouter.ai', kind: 'provider' },
+            { url: 'https://api.openai.com', kind: 'provider' },
+          ])
+        : undefined,
+      bazaarDiscovery: isProduction,
+      discoveryUrl: String(env.GROWTH_DISCOVERY_URL || '').trim() || undefined,
+      // Expanded discovery: scan GitHub, Google Cloud Agent Gallery, and
+      // Salesforce AgentExchange for new x402/crypto/AI-agent peers.
+      discoverFromAll: readBool(
+        env.GROWTH_DISCOVER_FROM_ALL,
+        'GROWTH_DISCOVER_FROM_ALL',
+        problems,
+        true,
+      ),
+      githubToken: String(env.GITHUB_TOKEN || '').trim() || undefined,
+      // Auto-detect public URL from hosting environment so the growth engine can
+      // advertise itself in pitches. Railway exposes RAILWAY_STATIC_URL; fall back
+      // to GROWTH_PUBLIC_URL / PUBLIC_URL; the growth engine in app.js falls back
+      // to localhost:port.
+      publicUrl: String(
+        env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || env.RAILWAY_STATIC_URL || '',
+      ).trim().replace(/\/+$/, '') || undefined,
+      intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 2 * 60 * 60_000),
+      maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 50 }, problems, 10),
+      statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
+      agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,
       // Task agent self-review cadence (0 = off). The agent audits its own
       // recent outcomes and prunes dead skills on this interval, so the
-      // library improves while the service is idle.
+      // library improves while the service is idle. Enabled in production
+      // so the agent refines its outreach while the service runs.
       reviewIntervalMs: readInt(
         env.AGENT_REVIEW_INTERVAL_MS,
         'AGENT_REVIEW_INTERVAL_MS',
         { min: 0 },
         problems,
-        0,
+        isProduction ? 4 * 60 * 60_000 : 0,
       ),
     },
 

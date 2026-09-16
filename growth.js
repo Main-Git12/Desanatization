@@ -272,7 +272,7 @@ export function createGrowthEngine({
   getContext,
 }) {
   /** @type {GrowthTarget[]} */
-  let targets = parseTargets(config.growth?.targets);
+  let targets = parseTargets(config.growth?.targets || config.growth?.seedTargets);
   let cycles = 0;
   let totalPitches = 0;
   /** @type {Array<object>} Inbound pitches from peers, newest first (capped). */
@@ -376,7 +376,10 @@ export function createGrowthEngine({
 
     // Continuously refresh the pool from the live CDP Bazaar so the engine
     // grows its own reach instead of relying on a static list.
-    await discoverFromBazaar();
+    // Only when explicitly enabled — tests should not hit external APIs.
+    if (config.growth?.bazaarDiscovery === true) {
+      await discoverFromBazaar();
+    }
 
     // Never pitch ourselves. A self-canary target (GROWTH_TARGETS pointing at
     // our own URL) is a useful liveness check, but pitching our own outreach
@@ -479,12 +482,12 @@ export function createGrowthEngine({
    *
    * @returns {Promise<GrowthTarget[]>} Newly discovered peers
    */
-  async function discoverFromBazaar() {
+   async function discoverFromBazaar() {
     const bazaarUrl = config.growth?.discoveryUrl ?? 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
     try {
-      const res = await fetchSafe(bazaarUrl, { signal: AbortSignal.timeout(10000) });
+      const res = await fetchSafe(bazaarUrl);
       if (!res.ok) return [];
-      const data = await res.json();
+      const data = JSON.parse(res.body);
       const items = data?.items ?? [];
       const seen = new Set(targets.map((t) => t.url));
       const fresh = [];
