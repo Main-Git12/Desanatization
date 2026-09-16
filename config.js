@@ -369,6 +369,7 @@ export function loadConfig(env = process.env) {
       publicUrl: String(env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || '').trim().replace(/\/+$/, '') || undefined,
       intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 6 * 60 * 60_000),
       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 20 }, problems, 5),
+      statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
     },
   };
 

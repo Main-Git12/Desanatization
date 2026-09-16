@@ -253,6 +253,7 @@ export function createApp({ config, logger, x402 }) {
     if (!pitch || typeof pitch !== 'object' || pitch.type !== 'x402-service-pitch' || !pitch.from) {
       return res.status(400).json({
         error: 'Expected a pitch document: {"type":"x402-service-pitch","from":"https://…",…}',
+        hint: 'Minimum shape: {"type":"x402-service-pitch","from":"https://your-service","offer":"what you sell and for how much"}.',
         requestId: req.id,
         timestamp: new Date().toISOString(),
       });
@@ -305,7 +306,15 @@ export function createApp({ config, logger, x402 }) {
   app.post('/api/sanitize/trial', (req, res) => {
     const { text, error } = validateSanitizeBody(req.body);
     if (error) {
-      return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
+      // Self-service hint: a recoverable 400 keeps the agent in the funnel —
+      // an opaque 400 loses the buyer forever.
+      return res.status(400).json({
+        error,
+        hint: 'Send JSON {"text": "your text"} (1-20000 chars). This endpoint is free — no payment required.',
+        example: { text: 'Mail jane@example.com about the invoice' },
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
     }
     trackFunnel('freeTrial');
     trackReferral(referralOf(req));
@@ -405,7 +414,13 @@ export function createApp({ config, logger, x402 }) {
   const serveSanitizeBatch = (req, res) => {
     const { items, error } = validateBatchBody(req.body);
     if (error) {
-      return res.status(400).json({ error, requestId: req.id, timestamp: new Date().toISOString() });
+      return res.status(400).json({
+        error,
+        hint: 'Send JSON {"items": ["text one", "text two"]} — 1 to 10 strings, each up to 20000 chars. One settlement covers all of them.',
+        example: { items: ['Mail jane@example.com', 'Call 415-555-1234'] },
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
     }
     trackFunnel('batchCall');
     trackReferral(referralOf(req));

@@ -30,6 +30,9 @@ const metrics = {
   receipts: [],
   // Referral leaderboard: which ?ref= brought paying buyers.
   referrals: {},
+  // Buyer retention: per-payer purchase counts (addresses are public on-chain
+  // facts, already in /receipts). Powers repeatPurchaseRate in /api/insights.
+  buyers: {},
   requestTimes: [],
 };
 
@@ -118,6 +121,13 @@ export function trackPayment({ amount, asset = 'unknown', payer, network, transa
     at: new Date().toISOString(),
   });
   if (metrics.receipts.length > 20) metrics.receipts.length = 20;
+  // Retention: the money question is not "did they buy" but "did they return".
+  if (payer) {
+    const buyer = metrics.buyers[payer] ?? { purchases: 0, firstAt: new Date().toISOString() };
+    buyer.purchases += 1;
+    buyer.lastAt = new Date().toISOString();
+    metrics.buyers[payer] = buyer;
+  }
   logger.info(
     `Payment settled: ${amount} of ${asset} on ${network || 'unknown'} from ${payer || 'unknown'} (tx ${transaction || 'n/a'})`,
   );
@@ -174,6 +184,8 @@ export function getInsights() {
     .map(([ref, sales]) => ({ ref, sales }))
     .sort((a, b) => b.sales - a.sales)
     .slice(0, 10);
+  const buyerEntries = Object.entries(metrics.buyers);
+  const returningBuyers = buyerEntries.filter(([, b]) => b.purchases >= 2).length;
   return {
     funnel,
     conversion: {
@@ -181,6 +193,20 @@ export function getInsights() {
       paidCalls,
       // Paid calls per free trial — the single number pricing experiments move.
       trialToPaidRate: freeTrial ? Number((paidCalls / freeTrial).toFixed(4)) : 0,
+    },
+    // Retention: a buyer who returns is worth more than a new one. If this
+    // rate is high, raise price; if buyers never return, the product is a
+    // one-shot — bundle or subscribe instead.
+    retention: {
+      totalBuyers: buyerEntries.length,
+      returningBuyers,
+      repeatPurchaseRate: buyerEntries.length
+        ? Number((returningBuyers / buyerEntries.length).toFixed(4))
+        : 0,
+      topBuyers: buyerEntries
+        .sort((a, b) => b[1].purchases - a[1].purchases)
+        .slice(0, 5)
+        .map(([address, b]) => ({ address, purchases: b.purchases, lastAt: b.lastAt })),
     },
     demand: {
       unpaidChallenges: metrics.paymentRequiredResponses,
@@ -254,5 +280,6 @@ export function resetMetrics() {
   metrics.funnel = {};
   metrics.receipts = [];
   metrics.referrals = {};
+  metrics.buyers = {};
   metrics.requestTimes = [];
 }

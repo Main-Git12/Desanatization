@@ -142,6 +142,13 @@ async function main() {
     x402.scheduleRetry();
   }
 
+      // Fire the first growth cycle at boot (then the interval in start() takes
+  // over). A cold engine that waits 6h for its first probe learns nothing for
+  // hours — the goal is agents finding us within minutes of deploy.
+  if (config.growth?.enabled) {
+    growthEngine.runCycle().catch((error) => logger.warn(`First growth cycle failed: ${error.message}`));
+  }
+
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 

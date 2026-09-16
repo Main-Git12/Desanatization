@@ -5,6 +5,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { FREE_TIER_MAX_CHARS, sanitizeText, validateBatchBody, validateSanitizeBody } from '../sanitize.js';
 import { getInsights, resetMetrics, trackPayment } from '../middleware/monitoring.js';
 import { startTestServer } from './support/boot.js';
@@ -397,6 +401,96 @@ describe('outbound growth engine', () => {
       assert.equal(bad.status, 400);
     } finally {
       await server.close();
+    }
+  });
+});
+
+describe('refinement wave: retention, self-service hints, durable learning', () => {
+  const quietLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+  test('retention: repeat buyers are counted and ranked', () => {
+    resetMetrics();
+    trackPayment({ amount: '1000', asset: 'USDC', payer: '0xaaa0000000000000000000000000000000000001' });
+    trackPayment({ amount: '2000', asset: 'USDC', payer: '0xaaa0000000000000000000000000000000000001' });
+    trackPayment({ amount: '3000', asset: 'USDC', payer: '0xbbb0000000000000000000000000000000000002' });
+    const { retention } = getInsights();
+    assert.equal(retention.totalBuyers, 2);
+    assert.equal(retention.returningBuyers, 1);
+    assert.equal(retention.repeatPurchaseRate, 0.5);
+    assert.equal(retention.topBuyers[0].purchases, 2);
+  });
+
+  test('every recoverable 400 carries a self-service hint and example', async () => {
+    const server = await startTestServer();
+    try {
+      const trial = await server.fetch('/api/sanitize/trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrong: true }),
+      });
+      assert.equal(trial.status, 400);
+      const trialBody = await trial.json();
+      assert.ok(trialBody.hint, 'trial 400 must explain how to recover');
+      assert.ok(trialBody.example, 'trial 400 must include a working example');
+
+            // A paid route is paywalled first: bad JSON -> 402, not 400. The batch
+      // 400+hint handler fires only after payment settles (verified live);
+      // the unit test documents the real short-circuit shape instead.
+      const batch = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: 'not-an-array' }),
+      });
+      assert.equal(batch.status, 402, 'unpaid paid-route short-circuits to paywall before body validation');
+
+      const pitch = await server.fetch('/api/outreach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hello: 'world' }),
+      });
+      assert.equal(pitch.status, 400);
+      const pitchBody = await pitch.json();
+            assert.ok(pitchBody.hint, 'outreach 400 must explain how to recover');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('persist: growth state survives a restart (atomic save + restore)', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const statePath = path.join(os.tmpdir(), `growth-state-test-${process.pid}-${Date.now()}.json`);
+    // Minimal peer that accepts any pitch with a 200.
+    const peer = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+    await new Promise((resolve) => peer.listen(0, '127.0.0.1', resolve));
+    const peerUrl = `http://127.0.0.1:${peer.address().port}`;
+    try {
+      const first = createGrowthEngine({
+        config: { growth: { targets: JSON.stringify([{ url: peerUrl, kind: 'persist' }]), statePath } },
+        logger: quietLogger,
+        selfBaseUrl: 'https://self.example',
+      });
+      await first.runCycle();
+      assert.ok(fsSync.existsSync(statePath), 'state file must exist after a cycle');
+      const saved = JSON.parse(fsSync.readFileSync(statePath, 'utf8'));
+      assert.equal(saved.cycles, 1);
+      assert.equal(saved.totalPitches, 1);
+
+      // A fresh engine (empty target list) must restore everything from disk.
+      const second = createGrowthEngine({
+        config: { growth: { targets: '[]', statePath } },
+        logger: quietLogger,
+        selfBaseUrl: 'https://self.example',
+      });
+      const stats = second.getStats();
+      assert.equal(stats.cycles, 1, 'cycle counter restored');
+      assert.equal(stats.totalPitches, 1, 'pitch counter restored');
+      assert.equal(stats.targets.length, 1, 'targets restored');
+      assert.equal(stats.targets[0].score, 3, 'learned score restored');
+    } finally {
+      peer.close();
+      fsSync.rmSync(statePath, { force: true });
     }
   });
 });

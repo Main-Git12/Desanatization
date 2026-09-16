@@ -15,6 +15,9 @@
 // small number of peers politely, measures, and adapts. Never a spam cannon.
 // ============================================================================
 
+import fsSync from 'node:fs';
+import { dirname } from 'node:path';
+
 const X402_CHALLENGE_HEADER = 'payment-required';
 
 /**
@@ -240,6 +243,53 @@ export function createGrowthEngine({
   /** @type {object} Latest environment reading (conversion, market heat). */
   let lastContext = {};
 
+  // Durable learning: restore the pool's earned scores, cycle counters and
+  // inbox across restarts when GROWTH_STATE_PATH points at a writable file
+  // (e.g. a mounted volume). Best-effort — never fatal.
+  if (config.growth?.statePath) {
+    try {
+      const saved = JSON.parse(fsSync.readFileSync(config.growth.statePath, 'utf8'));
+      targets = mergeDiscovered(targets, Array.isArray(saved.targets) ? saved.targets : []);
+      for (const target of targets) {
+        const prev = (saved.targets ?? []).find((s) => s.url === target.url);
+        if (!prev) continue;
+        target.score = typeof prev.score === 'number' ? prev.score : target.score;
+        target.pitches = prev.pitches ?? 0;
+        target.responses = prev.responses ?? 0;
+        target.failures = prev.failures ?? 0;
+        target.lastResult = prev.lastResult;
+        target.nextAttemptAt = prev.nextAttemptAt;
+        target.lastAt = prev.lastAt;
+      }
+      cycles = saved.cycles ?? 0;
+      totalPitches = saved.totalPitches ?? 0;
+      inbox = Array.isArray(saved.inbox) ? saved.inbox.slice(0, 50) : inbox;
+      logger.info(`Growth: restored state (${targets.length} targets, ${cycles} cycles) from ${config.growth.statePath}`);
+    } catch {
+      logger.info('Growth: no restorable state — starting a fresh ledger.');
+    }
+  }
+
+  /**
+   * Persist the learned ledger best-effort. Called after every mutation so a
+   * restart never loses what the engine paid to learn. Atomic write (tmp +
+   * rename) so a crash mid-save can never leave a torn file behind.
+   */
+  function saveState() {
+    if (!config.growth?.statePath) return;
+    try {
+      fsSync.mkdirSync(dirname(config.growth.statePath), { recursive: true });
+      const tmp = `${config.growth.statePath}.tmp`;
+      fsSync.writeFileSync(
+        tmp,
+        JSON.stringify({ savedAt: new Date().toISOString(), cycles, totalPitches, targets, inbox }),
+      );
+      fsSync.renameSync(tmp, config.growth.statePath);
+    } catch (error) {
+      logger.warn(`Growth: could not persist state (${error.message}) — continuing in memory.`);
+    }
+  }
+
   /**
    * Run one discover -> pitch -> learn cycle.
    *
@@ -293,6 +343,7 @@ export function createGrowthEngine({
       if (updated.lastResult === 'pitched') pitched += 1;
     }
     totalPitches += pitched;
+    saveState();
 
     logger.info(
       `Growth cycle ${cycles}: probed ${batch.length}, pitched ${pitched}, pool ${targets.length} ` +
@@ -322,6 +373,7 @@ export function createGrowthEngine({
       receivedAt: new Date().toISOString(),
     });
     if (inbox.length > 20) inbox.length = 20;
+    saveState();
     return true;
   }
 
@@ -389,6 +441,7 @@ export function createGrowthEngine({
       totalPitches,
       intervalMs,
       maxPerCycle,
+      statePath: config.growth?.statePath ?? null,
       context: lastContext,
       market: getMarketSummary(),
       inbox,
