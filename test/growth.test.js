@@ -279,6 +279,24 @@ describe('outbound growth engine', () => {
     assert.equal(merged.find((t) => t.url === 'https://c.example').kind, 'feed');
   });
 
+  test('collapseToOrigins flattens Bazaar routes to peer roots', async () => {
+    const { collapseToOrigins } = await import('../growth.js');
+    const items = [
+      { resource: 'https://api.onesource.io/api/chain/balance' },
+      { resource: 'https://api.onesource.io/api/chain/block' },
+      { resource: 'https://x402.botsmith.dev/x/tweet' },
+      { resource: 'not-a-url' },
+      null,
+      { resource: 'https://api.bitrefill.com/gift-cards' },
+    ];
+    const origins = collapseToOrigins(items);
+    assert.deepEqual(origins.sort(), [
+      'https://api.bitrefill.com',
+      'https://api.onesource.io',
+      'https://x402.botsmith.dev',
+    ]);
+  });
+
   test('buildPitch advertises storefront without leaking secrets', async () => {
     const { buildPitch } = await import('../growth.js');
     const pitch = buildPitch(

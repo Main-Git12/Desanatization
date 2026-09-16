@@ -96,6 +96,27 @@ export function mergeDiscovered(existing, feed) {
 }
 
 /**
+ * Collapse a Bazaar discovery feed into unique peer origins.
+ *
+ * The CDP Bazaar lists *routes* (full resource URLs with paths), not peer
+ * base URLs. Pitching a route URL is wrong — the outreach surface lives at the
+ * peer's root. This collapses every route to its origin so one host is one
+ * target, and the engine probes the host instead of a sub-path.
+ *
+ * @param {Array<string|{resource?: string}>} items - Raw Bazaar items
+ * @returns {string[]} Unique origin URLs (https://host)
+ */
+export function collapseToOrigins(items) {
+  const origins = new Set();
+  for (const item of items ?? []) {
+    const url = typeof item === 'string' ? item : item?.resource;
+    if (!url || typeof url !== 'string' || !/^https?:\/\//.test(url)) continue;
+    try { origins.add(new URL(url).origin); } catch { continue; }
+  }
+  return [...origins];
+}
+
+/**
  * Fetch with a timeout, never throwing. Shared with the task agent.
  *
  * @param {string} url - Absolute URL
@@ -448,17 +469,18 @@ export function createGrowthEngine({
       const items = data?.items ?? [];
       const seen = new Set(targets.map((t) => t.url));
       const fresh = [];
-      for (const item of items) {
-        const url = item?.resource;
-        if (!url || typeof url !== 'string' || !/^https?:\/\//.test(url)) continue;
-        if (seen.has(url)) continue;
+      // The Bazaar lists *routes* (resource URLs with paths), not peer base
+      // URLs. Pitching a route URL is wrong — the outreach surface lives at the
+      // peer's root. Collapse every route to its origin so one host is one
+      // target, and we probe the host, not a sub-path.
+      for (const origin of collapseToOrigins(items)) {
+        if (seen.has(origin)) continue;
         const ownHost = selfBaseUrl ? new URL(selfBaseUrl).host.toLowerCase() : null;
-        if (ownHost && new URL(url).host.toLowerCase() === ownHost) continue;
-        const kind = item?.type === 'http' ? 'bazaar' : 'manual';
-        const target = { url: url.replace(/\/+$/, ''), kind, score: 1, pitches: 0, responses: 0 };
+        if (ownHost && new URL(origin).host.toLowerCase() === ownHost) continue;
+        const target = { url: origin, kind: 'bazaar', score: 1, pitches: 0, responses: 0 };
         targets.push(target);
         fresh.push(target);
-        seen.add(url);
+        seen.add(origin);
       }
       if (fresh.length) logger.info(`Growth: discovered ${fresh.length} new peers from Bazaar`);
       return fresh;
