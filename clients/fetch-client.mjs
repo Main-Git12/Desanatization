@@ -56,7 +56,9 @@ async function main() {
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
   const started = performance.now();
-  const response = await fetchWithPayment(resourceUrl, { method: 'GET' });
+  const text = process.env.TEXT ?? 'Contact me at jane@example.com, SSN 123-45-6789, card 4111-1111-1111-1111';
+  const url = resourceUrl.includes('?') ? `${resourceUrl}&text=${encodeURIComponent(text)}` : `${resourceUrl}?text=${encodeURIComponent(text)}`;
+  const response = await fetchWithPayment(url, { method: 'GET' });
   const elapsed = ((performance.now() - started) / 1000).toFixed(3);
 
   const result = await httpClient.processResponse(response);
