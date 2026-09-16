@@ -824,6 +824,22 @@ With the official client the 402 → sign → retry loop is automatic:
 function buildX402Discovery(config, req) {
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const paidUrl = `${baseUrl}${config.resource.path}`;
+
+  // Resolve $0.001 price strings to atomic USDC units (6 decimals).
+  // The bazaar crawler reads `accepts[].amount` from the discovery document
+  // and will skip entries where amount is null. Without this, the service
+  // is invisible to every agent that reads the bazaar feed.
+  const resolveAtomicAmount = (price) => {
+    if (typeof price === 'string' && /^\$/.test(price)) {
+      const dollars = parseFloat(price.replace(/[^0-9.]/g, ''));
+      return String(Math.round(dollars * 1_000_000));
+    }
+    if (price?.amount) return price.amount;
+    return null;
+  };
+
+  const atomicAmount = resolveAtomicAmount(config.price);
+
   return {
     name: config.resource.serviceName,
     version: 2,
@@ -844,7 +860,7 @@ function buildX402Discovery(config, req) {
           {
             scheme: config.scheme,
             network: config.network,
-            amount: null, // resolved from `price` by the x402 layer
+            amount: atomicAmount,
             price: config.price,
             payTo: config.payToAddress,
             maxTimeoutSeconds: config.maxTimeoutSeconds,
@@ -869,6 +885,7 @@ function buildX402Discovery(config, req) {
           {
             scheme: config.scheme,
             network: config.network,
+            amount: atomicAmount,
             price: config.price,
             payTo: config.payToAddress,
             maxTimeoutSeconds: config.maxTimeoutSeconds,
