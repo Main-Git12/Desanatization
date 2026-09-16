@@ -30,6 +30,7 @@ import {
 import {
   BATCH_MAX_ITEMS,
   FREE_TIER_MAX_CHARS,
+  MAX_INPUT_CHARS,
   cacheStats,
   sanitizeCached,
   sanitizeText,
@@ -283,6 +284,24 @@ export function createApp({ config, logger, x402 }) {
   app.get('/skill.md', (req, res) => {
     res.type('text/markdown').send(buildSkillMd(config));
   });
+
+  // --- Machine discovery files ----------------------------------------------
+  // Automated crawlers grade a service close to zero if these 404. The x402
+  // Bazaar (the catalog agents actually query) and llms.txt crawling agents
+  // both probe /.well-known/* first: a listing we cannot be discovered through
+  // is revenue we never see. All are public, static and cacheable.
+  const discoveryDoc = (builder) => (req, res) => {
+    const body = builder(config, req);
+    // Cacheable at the edge: the contents only change when config does.
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.type('application/json').send(JSON.stringify(body));
+  };
+
+  app.get('/.well-known/x402', discoveryDoc(buildX402Discovery));
+  app.get('/.well-known/x402.json', discoveryDoc(buildX402Discovery));
+  app.get('/.well-known/x402-bazaar', discoveryDoc(buildX402Discovery));
+  app.get('/.well-known/mcp.json', discoveryDoc(buildMcpManifest));
+  app.get('/.well-known/agent.json', discoveryDoc(buildAgentCard));
 
   // Proof of work: settled payments are public on-chain facts. Publishing
   // them lets agents verify real buyers exist before they integrate.
@@ -721,4 +740,246 @@ curl -X POST ${config.resource.path.replace('/api/resource', '/api/sanitize/tria
 With the official client the 402 → sign → retry loop is automatic:
 \`EVM_PRIVATE_KEY=0x… node clients/fetch-client.mjs\`
 `;
+}/**
+ * x402 discovery document, served at /.well-known/x402* (machine discovery).
+ *
+ * This is the machine-readable business card an agent (or a directory crawler
+ * such as the x402 Bazaar) reads before deciding whether to pay. Independence
+ * from our own HTML matters: an agent that cannot parse this will not buy.
+ *
+ * @param {object} config - Loaded configuration
+ * @param {object} req - Express request (for the absolute service URL)
+ * @returns {object} Discovery document
+ */
+function buildX402Discovery(config, req) {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const paidUrl = `${baseUrl}${config.resource.path}`;
+  return {
+    name: config.resource.serviceName,
+    version: 2,
+    description:
+      'PII sanitization for AI agents: redacts emails, phone numbers, SSNs, credit-card ' +
+      'numbers, API keys, bearer tokens and URL tokens from text before you log, train on, ' +
+      'or forward it. Deterministic, no model call, sub-millisecond on cached input.',
+    serviceUrl: baseUrl,
+    // Directories index `resources`; keep the paid product first.
+    resources: [
+      {
+        url: paidUrl,
+        method: 'POST',
+        description: config.resource.description,
+        mimeType: config.resource.mimeType,
+        tags: ['pii', 'sanitize', 'redaction', 'privacy', 'security', 'compliance'],
+        accepts: [
+          {
+            scheme: config.scheme,
+            network: config.network,
+            amount: null, // resolved from `price` by the x402 layer
+            price: config.price,
+            payTo: config.payToAddress,
+            maxTimeoutSeconds: config.maxTimeoutSeconds,
+          },
+        ],
+      },
+      {
+        url: `${baseUrl}/api/sanitize/trial`,
+        method: 'POST',
+        description: `Free trial: first ${FREE_TIER_MAX_CHARS} characters at no cost, no wallet required.`,
+        mimeType: 'application/json',
+        tags: ['pii', 'sanitize', 'free', 'trial'],
+        accepts: [],
+      },
+      {
+        url: `${baseUrl}/api/sanitize/batch`,
+        method: 'POST',
+        description: `Batch: up to ${BATCH_MAX_ITEMS} texts for one settlement.`,
+        mimeType: 'application/json',
+        tags: ['pii', 'sanitize', 'batch', 'bulk'],
+        accepts: [
+          {
+            scheme: config.scheme,
+            network: config.network,
+            price: config.price,
+            payTo: config.payToAddress,
+            maxTimeoutSeconds: config.maxTimeoutSeconds,
+          },
+        ],
+      },
+    ],
+    currencies: [
+      {
+        id: 'USDC',
+        network: config.network,
+        decimals: 6,
+      },
+    ],
+    pricing: {
+      standard: {
+        price: config.price,
+        currency: 'USDC',
+        unit: 'per request',
+        network: config.network,
+      },
+    },
+    paymentMethods: [
+      { protocol: 'x402', version: 2, scheme: config.scheme, network: config.network },
+    ],
+    wallet: config.payToAddress,
+    // Standard discovery pointers so any crawler can find the rest.
+    links: {
+      llmsTxt: `${baseUrl}/llms.txt`,
+      openapi: `${baseUrl}/openapi.json`,
+      skill: `${baseUrl}/skill.md`,
+      receipts: `${baseUrl}/receipts`,
+      mcp: `${baseUrl}/.well-known/mcp.json`,
+    },
+    freeTrial: `${baseUrl}/api/sanitize/trial`,
+    contact: `${baseUrl}/llms.txt`,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * MCP (Model Context Protocol) manifest, served at /.well-known/mcp.json.
+ *
+ * MCP-aware agents auto-discover tool servers through this file. Declaring the
+ * sanitize tool in MCP terms is what turns us from "an API a human wires up"
+ * into "a tool an agent picks up on its own".
+ *
+ * @param {object} config - Loaded configuration
+ * @param {object} req - Express request (for the absolute service URL)
+ * @returns {object} MCP manifest
+ */
+function buildMcpManifest(config, req) {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return {
+    mcpVersion: '1.0',
+    name: config.resource.serviceName,
+    version: '1.0.0',
+    description: 'PII sanitization for AI agents, payable per call over x402 (USDC).',
+    transport: { type: 'http', url: `${baseUrl}${config.resource.path}` },
+    // The tool list is what an MCP client reads to decide to call us.
+    tools: [
+      {
+        name: 'text_sanitize',
+        description:
+          'Redact PII (emails, phones, SSNs, card numbers, secrets) from text. ' +
+          'Pay per call over x402; a free trial of the first ' +
+          `${FREE_TIER_MAX_CHARS} characters is available.`,
+        inputSchema: {
+          type: 'object',
+          required: ['text'],
+          properties: {
+            text: { type: 'string', maxLength: MAX_INPUT_CHARS, description: 'Text to sanitize' },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            clean: { type: 'string' },
+            redactions: { type: 'object' },
+            inputChars: { type: 'integer' },
+            outputChars: { type: 'integer' },
+          },
+        },
+        // Price disclosure: agents can filter by what they can afford.
+        payment: {
+          protocol: 'x402',
+          version: 2,
+          scheme: config.scheme,
+          network: config.network,
+          price: config.price,
+          payTo: config.payToAddress,
+        },
+      },
+      {
+        name: 'text_sanitize_batch',
+        description: `Redact PII from up to ${BATCH_MAX_ITEMS} texts in one paid call (one settlement).`,
+        inputSchema: {
+          type: 'object',
+          required: ['items'],
+          properties: {
+            items: {
+              type: 'array',
+              items: { type: 'string' },
+              minItems: 1,
+              maxItems: BATCH_MAX_ITEMS,
+            },
+          },
+        },
+        payment: {
+          protocol: 'x402',
+          version: 2,
+          scheme: config.scheme,
+          network: config.network,
+          price: config.price,
+          payTo: config.payToAddress,
+        },
+      },
+    ],
+    links: {
+      llmsTxt: `${baseUrl}/llms.txt`,
+      openapi: `${baseUrl}/openapi.json`,
+      discovery: `${baseUrl}/.well-known/x402.json`,
+    },
+  };
+}
+
+/**
+ * A2A-style agent card, served at /.well-known/agent.json.
+ *
+ * Research over 145 indexed x402 domains found *zero* published agent cards:
+ * the payment rails exist but services cannot describe themselves to each
+ * other. Publishing one is cheap differentiation for agent-to-agent discovery.
+ *
+ * @param {object} config - Loaded configuration
+ * @param {object} req - Express request (for the absolute service URL)
+ * @returns {object} Agent card
+ */
+function buildAgentCard(config, req) {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return {
+    name: config.resource.serviceName,
+    description:
+      'PII sanitization service for AI agents. Accepts x402 micropayments in USDC ' +
+      'and returns redacted text plus per-class redaction counts.',
+    url: baseUrl,
+    version: '1.0.0',
+    provider: { organization: config.resource.serviceName, url: baseUrl },
+    capabilities: {
+      streaming: false,
+      pushNotifications: false,
+      stateTransitionHistory: false,
+    },
+    defaultInputModes: ['application/json', 'text/plain'],
+    defaultOutputModes: ['application/json'],
+    skills: [
+      {
+        id: 'sanitize-pii',
+        name: 'Sanitize PII from text',
+        description:
+          'Redacts emails, phones, SSNs, card numbers, private keys, bearer tokens and ' +
+          'URL tokens. Deterministic and cache-backed.',
+        tags: ['pii', 'privacy', 'security', 'redaction'],
+        examples: ['Contact me at jane@example.com or 555-123-4567'],
+      },
+    ],
+    // How a peer agent pays us: the protocol facts, machine-readable.
+    payment: {
+      protocol: 'x402',
+      version: 2,
+      scheme: config.scheme,
+      network: config.network,
+      price: config.price,
+      payTo: config.payToAddress,
+      paidEndpoint: `${baseUrl}${config.resource.path}`,
+      freeTrialEndpoint: `${baseUrl}/api/sanitize/trial`,
+    },
+    discovery: {
+      x402: `${baseUrl}/.well-known/x402.json`,
+      mcp: `${baseUrl}/.well-known/mcp.json`,
+      openapi: `${baseUrl}/openapi.json`,
+      llmsTxt: `${baseUrl}/llms.txt`,
+    },
+  };
 }

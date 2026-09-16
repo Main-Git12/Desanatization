@@ -23,9 +23,6 @@
 const base = (process.argv[2] || process.env.BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
 const token = process.env.METRICS_TOKEN || '';
 
-/** Endpoints that must be reachable for the "current source" checks to run. */
-const REQUIRES_TOKEN = ['/api/growth', '/api/agent/task', '/api/agent/skills'];
-
 /** @type {Array<{name: string, ok: boolean, detail: string, skipped?: boolean}>} */
 const results = [];
 
@@ -173,6 +170,30 @@ for (const [name, path] of [
   check(`storefront ${name}`, store.status === 200, `HTTP ${store.status}`);
 }
 
+// --- 6. Machine discovery (what actually makes agents find us) ---------------
+// A 404 here means the paid product is invisible to every automated crawler,
+// which is indistinguishable from having no revenue at all.
+for (const path of [
+  '/.well-known/x402.json',
+  '/.well-known/x402-bazaar',
+  '/.well-known/mcp.json',
+  '/.well-known/agent.json',
+]) {
+  const doc = await call('GET', path);
+  const valid = doc.status === 200 && doc.body && typeof doc.body === 'object' && !doc.body._raw;
+  check(`discovery ${path}`, valid, valid ? 'valid JSON' : `HTTP ${doc.status}`);
+}
+
+if (token) {
+  const discovery = await call('GET', '/.well-known/x402.json');
+  const ready = discovery.status === 200 && discovery.body?.wallet;
+  check(
+    'discovery wallet matches the live pay-to address',
+    Boolean(ready),
+    ready ? `wallet=${discovery.body.wallet} network=${discovery.body?.pricing?.standard?.network}` : 'discovery document unreadable',
+  );
+}
+
 // --- Verdict -----------------------------------------------------------------
 let failed = 0;
 for (const result of results) {
@@ -185,7 +206,7 @@ console.log('');
 console.log(
   failed === 0
     ? `LIVE VERIFY OK — ${results.length - skipped}/${results.length - skipped} checks passed at ${base}` +
-        (skipped ? ` (${skipped} skipped — set METRICS_TOKEN to run them)` : '')
+    (skipped ? ` (${skipped} skipped — set METRICS_TOKEN to run them)` : '')
     : `LIVE VERIFY FAILED — ${failed}/${results.length} checks failed. The deployment does not match source.`,
 );
 process.exit(failed === 0 ? 0 : 1);
