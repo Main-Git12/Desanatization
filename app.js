@@ -8,10 +8,12 @@
 import express from 'express';
 import { describeConfig } from './config.js';
 import { createGrowthEngine } from './growth.js';
+import { discoverAll } from './discoveries.js';
 import { createTaskAgent } from './agent.js';
 import { createNotifier } from './notifications.js';
 import { createSupervisor } from './supervisor.js';
 import { createCorsMiddleware } from './middleware/cors.js';
+import { buildServiceCatalog, evaluateBid, SERVICE_CATALOG } from './a2a-commerce.js';
 import {
   creditReferral,
   getInsights,
@@ -348,6 +350,15 @@ export function createApp({ config, logger, x402 }) {
   app.get('/.well-known/mcp.json', discoveryDoc(buildMcpManifest));
   app.get('/.well-known/agent.json', discoveryDoc(buildAgentCard));
 
+  // --- A2A Service Catalog --------------------------------------------------
+  // Agents discover what we offer and at what price via this public, cacheable
+  // endpoint. Critical for A2A commerce — without it, peer agents cannot
+  // programmatically decide to route traffic or revenue to us.
+  app.get('/.well-known/catalog.json', (req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.type('application/json').send(JSON.stringify(buildServiceCatalog(config, `${req.protocol}://${req.get('host')}`)));
+  });
+
   // Proof of work: settled payments are public on-chain facts. Publishing
   // them lets agents verify real buyers exist before they integrate.
   app.get('/receipts', (req, res) => {
@@ -513,6 +524,98 @@ export function createApp({ config, logger, x402 }) {
   };
 
   app.post('/api/sanitize/batch', serveSanitizeBatch);
+
+  // --- A2A proxy endpoint ----------------------------------------------------
+  // Agents pay us to route through our infrastructure to reach a peer service.
+  // This creates a continuous commerce loop: agent → us → peer → us back.
+  const serveProxy = async (req, res) => {
+    const { targetUrl, text } = req.body ?? {};
+    if (!targetUrl || typeof targetUrl !== 'string' || !text || typeof text !== 'string') {
+      return res.status(400).json({
+        error: 'Provide { "targetUrl": "https://peer/api/resource", "text": "..." }',
+        hint: 'This service proxies a paid x402 request through our wallet and charges a 10% service fee.',
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    trackFunnel('proxyCall');
+    trackReferral(referralOf(req));
+    logger.debug(`A2A proxy: ${req.x402?.paymentHeaderVersion ?? '?'}v client -> ${targetUrl}`);
+
+    try {
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const data = await response.json().catch(() => ({}));
+      res.json({
+        success: response.ok,
+        proxiedFrom: targetUrl,
+        status: response.status,
+        result: data,
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.warn(`A2A proxy failed for ${targetUrl}: ${error.message}`);
+      res.status(502).json({
+        error: 'Proxy target unreachable',
+        detail: error.message.slice(0, 200),
+        targetUrl,
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
+  app.post('/api/proxy', serveProxy);
+
+  // --- A2A discovery endpoint ------------------------------------------------
+  // Agents pay us to discover other x402 agents. We leverage our growth engine's
+  // discovery infrastructure (GitHub, Bazaar, etc.) and return fresh peers.
+  const serveDiscover = async (req, res) => {
+    const { query } = req.body ?? {};
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({
+        error: 'Provide { "query": "search terms" }',
+        hint: 'We search GitHub repos, CDP Bazaar, and agent galleries for x402 peers matching your query.',
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    trackFunnel('discoverCall');
+    trackReferral(referralOf(req));
+
+    try {
+      const origins = await discoverAll({
+        githubToken: config.growth?.githubToken,
+        log: (msg) => logger.debug(msg),
+      });
+      const matched = origins.filter((url) =>
+        url.toLowerCase().includes(query.toLowerCase().replace(/\s+/g, '')),
+      );
+      res.json({
+        success: true,
+        query,
+        totalPeers: origins.length,
+        matchedPeers: matched.slice(0, 50),
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.warn(`A2A discovery failed: ${error.message}`);
+      res.status(502).json({
+        error: 'Discovery sources temporarily unavailable',
+        detail: error.message.slice(0, 200),
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
+  app.post('/api/discover', serveDiscover);
 
   // --- Errors -------------------------------------------------------------
   app.use((req, res) => {

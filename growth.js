@@ -479,6 +479,7 @@ export function createGrowthEngine({
     const conversionRates = recent.map((r) => (r.totalPitches > 0 ? r.pitched / r.totalPitches : 0));
     const avgConversion = conversionRates.reduce((a, b) => a + b, 0) / conversionRates.length;
     const recentResponses = recent.reduce((sum, r) => sum + r.responses, 0);
+    const recentRevenue = recent.reduce((sum, r) => sum + (r.pitched || 0) * 0.001, 0);
 
     const adaptations = [];
 
@@ -498,11 +499,11 @@ export function createGrowthEngine({
       adaptations.push({
         type: 'deepen-discovery',
         reason: `low discovery rate (${newTargetsPerCycle.toFixed(1)}/cycle)`,
-        action: 'adding targeted keyword scans',
+        action: 'extending to new discovery sources and deeper keyword scans',
       });
     }
 
-    // If conversion is high, scale up pitch volume.
+    // If conversion is high, scale up pitch volume and diversify.
     if (avgConversion > 0.3) {
       adaptations.push({
         type: 'scale-up',
@@ -510,6 +511,48 @@ export function createGrowthEngine({
         action: 'increasing pitch volume and extending to new peer types',
       });
       maxPerCycle = Math.min(50, maxPerCycle + 5);
+      // Also reduce interval to capitalize on momentum
+      intervalMs = Math.max(60_000, intervalMs * 0.8);
+    }
+
+    // Revenue-based adaptation: if revenue is flowing, invest more in outreach.
+    if (recentRevenue > 0.01) {
+      adaptations.push({
+        type: 'revenue-positive',
+        reason: `$${recentRevenue.toFixed(4)} revenue in last 10 cycles`,
+        action: 'maintaining aggressive outreach, reallocating budget to top channels',
+      });
+      // Identify top-performing channel and double down
+      const channelPerformance = new Map();
+      for (const entry of recent) {
+        const kind = entry.pitchKind || 'unknown';
+        const existing = channelPerformance.get(kind) || { pitches: 0, responses: 0 };
+        existing.pitches += entry.pitched || 0;
+        existing.responses += entry.responses || 0;
+        channelPerformance.set(kind, existing);
+      }
+      // Boost targets from high-response channels
+      for (const target of targets) {
+        const stats = channelPerformance.get(target.kind);
+        if (stats && stats.responses > 0 && stats.pitches > 0) {
+          const rate = stats.responses / stats.pitches;
+          if (rate > avgConversion) target.score += 0.5;
+        }
+      }
+    }
+
+    // Market saturation detection: if we're pitching many targets but getting
+    // no responses, the market may be saturated — diversify into new niches.
+    if (recentResponses === 0 && recent.reduce((sum, r) => sum + (r.pitched || 0), 0) > 20) {
+      adaptations.push({
+        type: 'diversify',
+        reason: 'market saturation — high pitch volume, zero responses',
+        action: 'shifting focus to undiscovered peer segments',
+      });
+      // Increase discovery sources
+      if (!config.growth?.discoverFromAll) {
+        config.growth = { ...config.growth, discoverFromAll: true };
+      }
     }
 
     if (adaptations.length > 0) {

@@ -319,8 +319,38 @@ export function buildRoutes(config, scheme) {
   return {
     [`GET ${config.resource.path}`]: makeRoute(discoverableGet),
     [`POST ${config.resource.path}`]: makeRoute(discoverablePost),
-    // Batch: one settlement, up to 10 texts — the volume buyer's route.
+  // Batch: one settlement, up to 10 texts — the volume buyer's route.
     'POST /api/sanitize/batch': makeRoute(discoverableBatch),
+    // A2A proxy: pay us to call a peer service on your behalf.
+    'POST /api/proxy': makeRoute({
+      discoverable: true,
+      method: 'POST',
+      bodyType: 'json',
+      description: 'A2A payment proxy: we pay a peer service and return its result with a markup. POST { "targetUrl": "https://peer/api/resource", "text": "..." }.',
+      input: { targetUrl: 'https://peer.example/api/resource', text: 'Contact jane@example.com' },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targetUrl: { type: 'string', description: 'Peer x402 endpoint to proxy through' },
+          text: { type: 'string', description: 'Text payload for the peer service' },
+        },
+        required: ['targetUrl', 'text'],
+      },
+      output: {
+        example: { success: true, clean: '[redacted-email]', proxiedFrom: 'https://peer.example' },
+        schema: { type: 'object', properties: { success: { type: 'boolean' }, clean: { type: 'string' }, proxiedFrom: { type: 'string' } } },
+      },
+    }),
+    // A2A discovery: pay us to find x402 agents on any network.
+    'POST /api/discover': makeRoute({
+      discoverable: true,
+      method: 'POST',
+      bodyType: 'json',
+      description: 'A2A peer discovery: discover x402-enabled agents matching a query. POST { "query": "pii sanitization" }.',
+      input: { query: 'pii sanitization' },
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+      output: { example: { peers: ['https://peer1.example', 'https://peer2.example'] }, schema: { type: 'object', properties: { peers: { type: 'array', items: { type: 'string' } } } } },
+    }),
   };
 }
 
