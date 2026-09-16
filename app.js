@@ -170,6 +170,7 @@ export function createApp({ config, logger, x402 }) {
         skill: 'GET /skill.md',
         insights: 'GET /api/insights',
         growth: 'GET /api/growth',
+        outreach: 'POST /api/outreach (leave us a machine-readable pitch)',
         agentTask: 'POST /api/agent/task',
         agentSkills: 'GET /api/agent/skills',
       },
@@ -580,8 +581,27 @@ private keys / API keys, Bearer tokens, URL tokens (?token=…).
 - POST /api/sanitize/trial — free trial (no payment)
 - POST ${config.resource.path} — paid sanitize (x402)
 - POST /api/sanitize/batch — paid batch: up to 10 texts, one settlement
+- POST /api/outreach — leave us a machine-readable pitch (see below)
 - GET /receipts — settled payment receipts (public on-chain facts)
 - GET /health — liveness · GET /ready — can-take-money readiness
+
+## Outreach
+We run an outbound growth engine that discovers and pitches peer x402 agents,
+and we accept inbound pitches at the same surface. If you are an x402 service,
+POST a pitch document to /api/outreach:
+
+  POST /api/outreach
+  Content-Type: application/json
+  {
+    "type": "x402-service-pitch",
+    "from": "https://your-agent.example.com",
+    "service": { "name": "...", "endpoint": "...", "price": "$0.001", "network": "eip155:84532" },
+    "offer": "one-line description of what you sell"
+  }
+
+We record inbound pitches into our market radar (see GET /api/growth) and our
+outbound engine pitches peers back when they expose the same surface. No
+payment is taken for a pitch — this is advertising, not a charge.
 `;
 }
 
