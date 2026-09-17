@@ -236,10 +236,6 @@ export async function probeAndPitch(target, pitch) {
   // Pre-filter check: x402-aware targets get priority outreach, but we no
   // longer skip non-x402 peers entirely. Every reachable target gets at
   // least one pitch attempt — the market learns faster when heat=0.
-  const isX402Peer =
-    root.status === 402 ||
-    Boolean(root.headers.get(X402_CHALLENGE_HEADER)) ||
-    root.body.includes('x402');
 
   const hasLlms = root.body.includes('llms.txt') || (await fetchSafe(`${target.url}/llms.txt`)).ok;
 
