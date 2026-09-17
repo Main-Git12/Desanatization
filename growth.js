@@ -232,36 +232,53 @@ export async function probeAndPitch(target, pitch) {
     Boolean(root.headers.get(X402_CHALLENGE_HEADER)) ||
     root.body.includes('x402');
 
-  // Pre-flight validation: skip non-x402 endpoints entirely. Only engage
-  // peers that natively speak x402 — reduces wasted outreach by 70%+.
-  if (!isX402Peer) {
-    updated.lastResult = 'reachable:no-x402';
-    updated.failures = (target.failures ?? 0) + 1;
-    updated.nextAttemptAt = new Date(
-      Date.now() + Math.min(300_000, 30_000 * 2 ** updated.failures),
-    ).toISOString();
-    updated.score = Math.max(0, target.score - 0.25);
-    return updated;
-  }
+  // --- AGGRESSIVE MODE (day-of-launch until first sale) ---
+  // Pre-filter check: x402-aware targets get priority outreach, but we no
+  // longer skip non-x402 peers entirely. Every reachable target gets at
+  // least one pitch attempt — the market learns faster when heat=0.
+  const isX402Peer =
+    root.status === 402 ||
+    Boolean(root.headers.get(X402_CHALLENGE_HEADER)) ||
+    root.body.includes('x402');
 
   const hasLlms = root.body.includes('llms.txt') || (await fetchSafe(`${target.url}/llms.txt`)).ok;
 
-  // Self-correcting outreach: try the endpoint that worked last time first,
-  // falling back to the full sequence. This adapts to each peer's preference.
-  const previousSurface = target.lastSurface || '/api/outreach';
-  const surfaces = previousSurface !== '/api/outreach'
-    ? [previousSurface, '/api/outreach', '/api/pitch', '/contact']
-    : ['/api/outreach', '/api/pitch', '/contact'];
+  // Discover A2A endpoint from agent card when available.
+  let a2aEndpoint = null;
+  const agentCard = await fetchSafe(`${target.url}/.well-known/agent.json`);
+  if (agentCard.ok) {
+    try {
+      const card = JSON.parse(agentCard.body);
+      if (card?.url && /^https?:\/\//.test(card.url)) {
+        a2aEndpoint = card.url.replace(/\/+$/, '');
+      }
+    } catch {}
+  }
 
+  // Full outreach surface list — try every known entry point concurrently.
+  const previousSurface = target.lastSurface;
+  const surfaces = previousSurface
+    ? [previousSurface, '/api/outreach', '/api/pitch', '/contact', '/api/agents', '/api']
+    : ['/api/outreach', '/api/pitch', '/contact', '/api/agents', '/api'];
+
+  // Add A2A endpoint if discovered from agent card.
+  if (a2aEndpoint) surfaces.unshift(a2aEndpoint);
+
+  // Parallel outreach: fire all surface attempts at once, take the first win.
   let pitched = false;
   let workingSurface = null;
-  for (const surface of surfaces) {
-    const attempt = await fetchSafe(`${target.url}${surface}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pitch),
-    });
-    if (attempt.ok) {
+  const attempts = await Promise.all(
+    surfaces.map(async (surface) => {
+      const ok = (await fetchSafe(`${target.url}${surface}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pitch),
+      })).ok;
+      return { surface, ok };
+    }),
+  );
+  for (const { surface, ok } of attempts) {
+    if (ok) {
       pitched = true;
       workingSurface = surface;
       break;
@@ -273,8 +290,12 @@ export async function probeAndPitch(target, pitch) {
     updated.failures = 0;
     updated.nextAttemptAt = undefined;
     updated.lastSurface = workingSurface;
-    updated.score += 2;
+    updated.score += isX402Peer ? 3 : 1.5;
     updated.lastResult = 'pitched';
+  } else if (root.ok) {
+    updated.failures = 0;
+    updated.score += 0.5;
+    updated.lastResult = 'reachable:no-surface';
   } else {
     updated.failures = (target.failures ?? 0) + 1;
     updated.nextAttemptAt = new Date(
