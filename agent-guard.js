@@ -287,7 +287,12 @@ export class AgentGuard {
       result: summary,
       time: entry.timestamp,
     });
-    if (this.recentPairs.length > this.opts.cycleThreshold * 2) {
+    // eslint-disable-next-line no-console
+    if (process.env.GUARD_DEBUG_PAIRS) console.log('[guard] pairs', this.recentPairs.length, maxPairsProbe(this.opts));
+    // Keep the window truncated to an even length: cycle detection compares
+    // two equal halves, and an odd count leaves a pair in neither half.
+    const maxPairs = this.opts.cycleThreshold * 2;
+    while (this.recentPairs.length > maxPairs) {
       this.recentPairs.shift();
     }
 
@@ -344,8 +349,13 @@ export class AgentGuard {
     }
 
     // ── Cycle detection: identical (tool+args -> result) pairs ──
-    if (!loopDetected && this.recentPairs.length >= this.opts.cycleThreshold * 2) {
-      const half = this.recentPairs.length / 2;
+    // Compare two non-overlapping equal-sized windows. A fractional split
+    // (odd pair count) would index a non-integer position and compare
+    // undefined against a real pair, silently missing real cycles — so trim
+    // the window to an even length first.
+    const window = this.recentPairs.length - (this.recentPairs.length % 2);
+    if (!loopDetected && window >= this.opts.cycleThreshold * 2) {
+      const half = window / 2;
       for (let i = 0; i < half; i++) {
         const a = this.recentPairs[i];
         const b = this.recentPairs[i + half];

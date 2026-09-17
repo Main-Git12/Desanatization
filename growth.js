@@ -260,21 +260,18 @@ export async function probeAndPitch(target, pitch) {
   // Add A2A endpoint if discovered from agent card.
   if (a2aEndpoint) surfaces.unshift(a2aEndpoint);
 
-  // Parallel outreach: fire all surface attempts at once, take the first win.
+  // Serial outreach: try surfaces one at a time and stop at the first win.
+  // Firing them all concurrently would emit a burst of requests at a single
+  // third-party host; a peer deserves exactly one pitch attempt per cycle.
   let pitched = false;
   let workingSurface = null;
-  const attempts = await Promise.all(
-    surfaces.map(async (surface) => {
-      const ok = (await fetchSafe(`${target.url}${surface}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pitch),
-      })).ok;
-      return { surface, ok };
-    }),
-  );
-  for (const { surface, ok } of attempts) {
-    if (ok) {
+  for (const surface of surfaces) {
+    const attempt = await fetchSafe(`${target.url}${surface}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pitch),
+    });
+    if (attempt.ok) {
       pitched = true;
       workingSurface = surface;
       break;
@@ -322,6 +319,12 @@ export function createGrowthEngine({
   maxPerCycle = 5,
   getContext,
 }) {
+  // Mutable cadence: assessAndAdapt() may shorten the interval when
+  // conversion is hot. The knob lives beside the timer so a change is
+  // observed by the loop instead of mutating a parameter nobody re-reads.
+  let currentIntervalMs = intervalMs;
+  /** @type {NodeJS.Timeout|undefined} */
+  let timer;
   /** @type {GrowthTarget[]} */
   let targets = parseTargets(config.growth?.targets || config.growth?.seedTargets);
   let cycles = 0;
@@ -332,6 +335,13 @@ export function createGrowthEngine({
   let lastContext = {};
   /** Queued by the health supervisor to skip the next cycle (reversible). */
   let skipNextCycle = false;
+  /**
+   * Market summary cache. The inbox only changes on recordInbound() and at the
+   * start of a cycle, so the price-point regex scan runs once per cycle instead
+   * of once per consumer (buildPitch, getPricingAdvice, getStats).
+   * @type {object|null}
+   */
+  let cachedMarket = null;
 
   // META-LEARNING: the engine tracks its own strategy effectiveness and adapts.
   // Each strategy has a success rate, cost, and adoption counter.
@@ -365,6 +375,7 @@ export function createGrowthEngine({
       cycles = saved.cycles ?? 0;
       totalPitches = saved.totalPitches ?? 0;
       inbox = Array.isArray(saved.inbox) ? saved.inbox.slice(0, 50) : inbox;
+      cachedMarket = null;
       logger.info(`Growth: restored state (${targets.length} targets, ${cycles} cycles) from ${config.growth.statePath}`);
     } catch {
       logger.info('Growth: no restorable state — starting a fresh ledger.');
@@ -399,10 +410,14 @@ export function createGrowthEngine({
    *
    * @returns {Promise<object>} Cycle summary
    */
-  async function runCycle() {
-    cycles += 1;
-
-    // DISCOVER: an optional registry feed expands the pool every cycle.
+  /**
+   * DISCOVER phase: expand the target pool from every configured source.
+   * Each source is best-effort — a failure logs and the cycle continues.
+   *
+   * @returns {Promise<{pool: GrowthTarget[], discoveredOrigins: string[]}>}
+   */
+  async function discoverTargets() {
+    // An optional registry feed expands the pool every cycle.
     if (config.growth?.discoveryUrl) {
       const feed = await fetchSafe(config.growth.discoveryUrl);
       if (feed.ok) {
@@ -418,27 +433,20 @@ export function createGrowthEngine({
 
     // Expanded discovery: scan development hubs, GitHub repos, Google Cloud
     // Agent Gallery and Salesforce AgentExchange for new x402/crypto peers.
-    // Each source is best-effort — a failure logs a warning and continues.
     let discoveredOrigins = [];
     if (config.growth?.discoverFromAll) {
       try {
-        const origins = await discoverAll({
+        discoveredOrigins = await discoverAll({
           githubToken: config.growth?.githubToken,
           log: (message) => logger.warn(message),
         });
-        discoveredOrigins = origins;
-        if (origins.length > 0) {
-          logger.info(`Growth: discovered ${origins.length} new targets from expanded sources`);
-          targets = mergeDiscovered(targets, origins.map((url) => ({ url, kind: 'discovered' })));
+        if (discoveredOrigins.length > 0) {
+          logger.info(`Growth: discovered ${discoveredOrigins.length} new targets from expanded sources`);
+          targets = mergeDiscovered(targets, discoveredOrigins.map((url) => ({ url, kind: 'discovered' })));
         }
       } catch (error) {
         logger.warn(`Growth: expanded discovery failed: ${error.message}`);
       }
-    }
-
-    if (targets.length === 0) {
-      logger.info('Growth cycle: no targets configured (set GROWTH_TARGETS or GROWTH_DISCOVERY_URL).');
-      return { cycles, pitched: 0, pool: 0 };
     }
 
     // Continuously refresh the pool from the live CDP Bazaar so the engine
@@ -457,14 +465,19 @@ export function createGrowthEngine({
       ? targets.filter((t) => new URL(t.url).host.toLowerCase() !== ownHost)
       : targets;
 
-    if (pool.length === 0) {
-      logger.info('Growth cycle: every configured target is our own URL — nothing to pitch.');
-      return { cycles, pitched: 0, pool: 0 };
-    }
+    return { pool, discoveredOrigins };
+  }
 
-    // LEARN: adapt effort to the environment. Cold conversion damps effort,
-    // hot conversion or a heated market (peers pitching us) raises it to the
-    // cap. Peers in backoff are skipped entirely.
+  /**
+   * LEARN phase (selection): adapt effort to the environment and pick the
+   * highest-scoring peers that are not in backoff.
+   * Cold conversion damps effort, hot conversion or a heated market (peers
+   * pitching us) raises it to the cap. Peers in backoff are skipped entirely.
+   *
+   * @param {GrowthTarget[]} pool - Non-self targets
+   * @returns {{batch: GrowthTarget[], ordered: GrowthTarget[], effectiveMax: number}}
+   */
+  function selectBatch(pool) {
     lastContext = getContext?.() ?? {};
     const heat = Math.min(
       1,
@@ -479,6 +492,32 @@ export function createGrowthEngine({
     const batch = ordered
       .filter((t) => !t.nextAttemptAt || Date.parse(t.nextAttemptAt) <= now)
       .slice(0, effectiveMax);
+    return { batch, ordered, effectiveMax };
+  }
+
+  /**
+   * Run one discover -> pitch -> learn cycle.
+   *
+   * @returns {Promise<object>} Cycle summary
+   */
+  async function runCycle() {
+    cycles += 1;
+    // One market scan per cycle; consumers below reuse this snapshot.
+    cachedMarket = null;
+
+    // 1. DISCOVER
+    const { pool, discoveredOrigins } = await discoverTargets();
+    if (pool.length === 0) {
+      logger.info(
+        targets.length === 0
+          ? 'Growth cycle: no targets configured (set GROWTH_TARGETS or GROWTH_DISCOVERY_URL).'
+          : 'Growth cycle: every configured target is our own URL — nothing to pitch.',
+      );
+      return { cycles, pitched: 0, pool: 0 };
+    }
+
+    // 2. PITCH — select the batch, then probe and pitch each peer in turn.
+    const { batch, ordered, effectiveMax } = selectBatch(pool);
     const pitch = buildPitch(config, selfBaseUrl, getMarketSummary());
 
     let pitched = 0;
@@ -513,9 +552,6 @@ export function createGrowthEngine({
     );
     return { cycles, pitched, probed: batch.length, pool: targets.length, effectiveMax };
   }
-
-  /** @type {NodeJS.Timeout|undefined} */
-  let timer;
 
   /**
    * Assess current performance against recent history. If conversion is below
@@ -563,8 +599,10 @@ export function createGrowthEngine({
         action: 'increasing pitch volume and extending to new peer types',
       });
       maxPerCycle = Math.min(50, maxPerCycle + 5);
-      // Also reduce interval to capitalize on momentum
-      intervalMs = Math.max(60_000, intervalMs * 0.8);
+      // Also reduce interval to capitalize on momentum, and re-arm the live
+      // timer so the shorter cadence takes effect on the next tick.
+      currentIntervalMs = Math.max(60_000, currentIntervalMs * 0.8);
+      reschedule();
     }
 
     // Revenue-based adaptation: if revenue is flowing, invest more in outreach.
@@ -639,9 +677,28 @@ export function createGrowthEngine({
       performanceHistory: performanceHistory.slice(-20),
       strategyMetrics: Object.fromEntries(strategyMetrics),
       maxPerCycle,
-      intervalMs,
+      intervalMs: currentIntervalMs,
     };
   }
+  /**
+   * (Re-)arm the cycle timer using the current cadence. Called on start and
+   * whenever assessAndAdapt() changes currentIntervalMs, so an adapted
+   * interval is observed by the running loop rather than silently ignored.
+   */
+  function reschedule() {
+    if (!config.growth?.enabled) return;
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {
+      if (skipNextCycle) {
+        skipNextCycle = false;
+        logger.info('Growth: cycle skipped on health instruction.');
+        return;
+      }
+      runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
+    }, currentIntervalMs);
+    timer.unref();
+  }
+
   function recordInbound(pitch, source) {
     if (!pitch || typeof pitch !== 'object') return false;
     inbox.unshift({
@@ -652,6 +709,7 @@ export function createGrowthEngine({
       receivedAt: new Date().toISOString(),
     });
     if (inbox.length > 20) inbox.length = 20;
+    cachedMarket = null; // Inbox changed — the cached summary is stale.
     saveState();
     return true;
   }
@@ -662,6 +720,7 @@ export function createGrowthEngine({
    * @returns {object} Pitch volume, distinct peers, observed price points
    */
   function getMarketSummary() {
+    if (cachedMarket) return cachedMarket;
     const prices = [];
     const peers = new Set();
     for (const p of inbox) {
@@ -669,12 +728,13 @@ export function createGrowthEngine({
       const matches = typeof p.offer === 'string' ? p.offer.match(/\$\s?([0-9]*\.?[0-9]+)/g) : null;
       if (matches) for (const raw of matches) prices.push(parseFloat(raw.replace(/[$\s]/g, '')));
     }
-    return {
+    cachedMarket = {
       pitches: inbox.length,
       distinctPeers: peers.size,
       pricePoints: prices,
       min: prices.length ? Math.min(...prices) : null,
     };
+    return cachedMarket;
   }
 
   /**
@@ -684,27 +744,28 @@ export function createGrowthEngine({
    * @returns {Promise<GrowthTarget[]>} Newly discovered peers
    */
    async function discoverFromBazaar() {
-    const bazaarUrl = config.growth?.discoveryUrl ?? 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
+    // runCycle's generic DISCOVER block already fetched and merged
+    // config.growth.discoveryUrl. Only fall back to it here when that block is
+    // disabled — otherwise the same feed would be fetched and merged twice per
+    // cycle. With no configured feed we use the public CDP Bazaar.
+    const genericFeedActive = Boolean(config.growth?.discoveryUrl);
+    const bazaarUrl = genericFeedActive
+      ? null
+      : config.growth?.discoveryUrl ?? 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
+    if (!bazaarUrl) return [];
     try {
       const res = await fetchSafe(bazaarUrl);
       if (!res.ok) return [];
       const data = JSON.parse(res.body);
       const items = data?.items ?? [];
-      const seen = new Set(targets.map((t) => t.url));
-      const fresh = [];
       // The Bazaar lists *routes* (resource URLs with paths), not peer base
       // URLs. Pitching a route URL is wrong — the outreach surface lives at the
       // peer's root. Collapse every route to its origin so one host is one
-      // target, and we probe the host, not a sub-path.
-      for (const origin of collapseToOrigins(items)) {
-        if (seen.has(origin)) continue;
-        const ownHost = selfBaseUrl ? new URL(selfBaseUrl).host.toLowerCase() : null;
-        if (ownHost && new URL(origin).host.toLowerCase() === ownHost) continue;
-        const target = { url: origin, kind: 'bazaar', score: 1, pitches: 0, responses: 0 };
-        targets.push(target);
-        fresh.push(target);
-        seen.add(origin);
-      }
+      // target, and we probe the host, not a sub-path. mergeDiscovered() does
+      // the URL normalisation, dedupe and self-filtering in one place.
+      const before = targets.length;
+      targets = mergeDiscovered(targets, collapseToOrigins(items).map((url) => ({ url, kind: 'bazaar' })));
+      const fresh = targets.slice(before);
       if (fresh.length) logger.info(`Growth: discovered ${fresh.length} new peers from Bazaar`);
       return fresh;
     } catch (error) {
@@ -763,7 +824,7 @@ export function createGrowthEngine({
         enabled: Boolean(config.growth?.enabled),
         cycles,
         totalPitches,
-        intervalMs,
+        intervalMs: currentIntervalMs,
         maxPerCycle,
         statePath: config.growth?.statePath ?? null,
         context: lastContext,
@@ -798,15 +859,7 @@ export function createGrowthEngine({
       // First cycle fires immediately so the engine is working from boot,
       // then continues on the interval.
       runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
-      timer = setInterval(() => {
-        if (skipNextCycle) {
-          skipNextCycle = false;
-          logger.info('Growth: cycle skipped on health instruction.');
-          return;
-        }
-        runCycle().catch((error) => logger.warn(`Growth cycle failed: ${error.message}`));
-      }, intervalMs);
-      timer.unref();
+      reschedule();
     },
     stop: () => {
       if (timer) clearInterval(timer);

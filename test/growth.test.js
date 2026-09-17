@@ -545,7 +545,12 @@ describe('refinement wave: retention, self-service hints, durable learning', () 
       assert.equal(stats.cycles, 1, 'cycle counter restored');
       assert.equal(stats.totalPitches, 1, 'pitch counter restored');
       assert.equal(stats.targets.length, 1, 'targets restored');
-      assert.equal(stats.targets[0].score, 3, 'learned score restored');
+      // The exact score depends on how many peer responses the cycle earned
+      // (base 1 + x402 pitch bonus + response bonus), so assert the invariant:
+      // an earned, above-baseline score survived the restart byte-for-byte.
+      const savedScore = saved.targets[0].score;
+      assert.ok(savedScore > 1, 'cycle must have earned score above the baseline');
+      assert.equal(stats.targets[0].score, savedScore, 'learned score restored');
     } finally {
       peer.close();
       fsSync.rmSync(statePath, { force: true });
@@ -553,3 +558,120 @@ describe('refinement wave: retention, self-service hints, durable learning', () 
   });
 });
 
+// ============================================================================
+// probeAndPitch: the three outcome branches and what each one teaches.
+//
+// The per-target learning ledger is the whole point of the growth engine, so
+// each branch is exercised directly: an unreachable peer must back off, a
+// reachable peer with no outreach surface must stay in rotation, and a peer
+// that accepts a pitch must be scored up and have its backoff cleared.
+// ============================================================================
+describe('probeAndPitch: outcome branches', () => {
+  const quietLogger = { info() {}, warn() {}, debug() {}, error() {} };
+
+  /** Start a one-off HTTP peer; returns { url, close }. */
+  async function startPeer(handler) {
+    const server = http.createServer(handler);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      url: `http://127.0.0.1:${server.address().port}`,
+      close: () => new Promise((resolve) => server.close(resolve)),
+    };
+  }
+
+  function targetFor(url) {
+    return { url, kind: 'test', score: 1, pitches: 0, responses: 0 };
+  }
+
+  test('unreachable peer: score drops, failures increment, backoff doubles', async () => {
+    const { probeAndPitch } = await import('../growth.js');
+    // Port 1 on loopback refuses connections — the deterministic dead peer.
+    const target = targetFor('http://127.0.0.1:1');
+
+    const first = await probeAndPitch(target, { type: 'x402-service-pitch' });
+    assert.equal(first.lastResult, 'unreachable:0');
+    assert.equal(first.score, 0.5, 'score loses 0.5 per failed contact');
+    assert.equal(first.failures, 1);
+    assert.ok(first.nextAttemptAt, 'a dead peer must be given a retry time');
+    // First failure backs off 60s * 2^1 = 120s.
+    const firstDelay = Date.parse(first.nextAttemptAt) - Date.now();
+    assert.ok(firstDelay > 60_000 && firstDelay <= 121_000, `unexpected backoff ${firstDelay}ms`);
+
+    // Second failure compounds: 60s * 2^2 = 240s.
+    const second = await probeAndPitch(first, { type: 'x402-service-pitch' });
+    assert.equal(second.failures, 2);
+    assert.equal(second.score, 0, 'score never goes negative');
+    const secondDelay = Date.parse(second.nextAttemptAt) - Date.now();
+    assert.ok(secondDelay > firstDelay, 'backoff must grow with consecutive failures');
+  });
+
+  test('reachable peer with no outreach surface: small score bump, no failures', async () => {
+    const { probeAndPitch } = await import('../growth.js');
+    // Root succeeds but every POST surface 404s.
+    const peer = await startPeer((req, res) => {
+      if (req.method === 'POST') {
+        res.writeHead(404);
+        res.end('no outreach here');
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('hello, plain website');
+      }
+    });
+    try {
+      const updated = await probeAndPitch(targetFor(peer.url), { type: 'x402-service-pitch' });
+      assert.equal(updated.lastResult, 'reachable:no-surface');
+      assert.equal(updated.failures, 0, 'a reachable peer is not a failure');
+      assert.equal(updated.nextAttemptAt, undefined, 'reachable peers stay in rotation');
+      assert.equal(updated.score, 1.5, 'reachable earns a small bump');
+      assert.equal(updated.responses, 1, 'the root response is counted');
+    } finally {
+      await peer.close();
+    }
+  });
+
+  test('pitched peer: x402 bonus, surface remembered, backoff cleared', async () => {
+    const { probeAndPitch } = await import('../growth.js');
+    // Accepts the pitch and advertises itself as an x402 peer.
+    const peer = await startPeer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'payment-required': 'x402' });
+      res.end('{"x402":"exact"}');
+    });
+    try {
+      const priorFailures = { ...targetFor(peer.url), failures: 2, score: 1 };
+      const updated = await probeAndPitch(priorFailures, { type: 'x402-service-pitch' });
+
+      assert.equal(updated.lastResult, 'pitched');
+      assert.equal(updated.failures, 0, 'a successful pitch must clear the failure streak');
+      assert.equal(updated.nextAttemptAt, undefined, 'backoff is lifted after success');
+      assert.equal(updated.score, 4, 'start 1 + x402 bonus 3');
+      assert.ok(updated.lastSurface, 'the working surface is remembered for the next cycle');
+      assert.equal(updated.pitches, priorFailures.pitches + 1);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  test('runCycle honours per-target backoff and skips peers not yet due', async () => {
+    const { createGrowthEngine } = await import('../growth.js');
+    const statePath = path.join(os.tmpdir(), `growth-backoff-${process.pid}-${Date.now()}.json`);
+    try {
+      const engine = createGrowthEngine({
+        config: {
+          growth: { targets: JSON.stringify([{ url: 'http://127.0.0.1:1', kind: 'dead' }]), statePath },
+        },
+        logger: quietLogger,
+        selfBaseUrl: 'https://self.example',
+      });
+
+      const first = await engine.runCycle();
+      assert.equal(first.probed, 1, 'the dead peer is probed once');
+      assert.equal(first.pitched, 0, 'a dead peer cannot be pitched');
+
+      // Its nextAttemptAt is now in the future, so the next cycle must skip it.
+      const second = await engine.runCycle();
+      assert.equal(second.probed, 0, 'a backing-off peer is not re-probed');
+    } finally {
+      fsSync.rmSync(statePath, { force: true });
+    }
+  });
+});
