@@ -518,8 +518,8 @@ describe('refinement wave: retention, self-service hints, durable learning', () 
     const statePath = path.join(os.tmpdir(), `growth-state-test-${process.pid}-${Date.now()}.json`);
     // Minimal peer that accepts any pitch with a 200.
     const peer = http.createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{}');
+      res.writeHead(200, { 'Content-Type': 'application/json', 'payment-required': 'x402' });
+      res.end('{"x402":"exact"}');
     });
     await new Promise((resolve) => peer.listen(0, '127.0.0.1', resolve));
     const peerUrl = `http://127.0.0.1:${peer.address().port}`;

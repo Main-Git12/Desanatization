@@ -108,7 +108,7 @@ const GITHUB_SEARCH_URL = 'https://api.github.com/search/repositories';
 export async function discoverFromGitHub({ query, perPage = 30, token } = {}) {
   const searchQuery =
     query ||
-    'x402 OR "payment required" OR "ai agent" OR "llms.txt" in:readme,description,topics language:javascript,typescript,python&sort=updated';
+    '"x402" OR "x402 protocol" OR "payment required" OR "crypto agents" OR "AI agent payment" OR "llms.txt" OR "agent-to-agent commerce" OR "a2a protocol" OR "agent commerce" in:readme,description,topics language:javascript,typescript,python&sort=updated';
 
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -156,12 +156,16 @@ export async function discoverFromGitHub({ query, perPage = 30, token } = {}) {
     }
   }
 
-  // Deduplicate, filter to https origins only (github.com repos are http but
-  // we still want them — they represent projects with x402 potential).
+  // Deduplicate, filter to valid https origins only (skip localhost, internal,
+  // and malformed URLs that are noise in a production outreach pool).
   const seen = new Set();
   const results = [];
   for (const origin of origins) {
     if (!seen.has(origin)) {
+      // Skip localhost, internal IPs, and obviously fake URLs
+      const host = (() => { try { return new URL(origin).hostname } catch { return '' } })();
+      if (host === 'localhost' || host === 'your_host' || host === 'your-domain' || host.endsWith('.local')) continue;
+      if (!/^https?:\/\//.test(origin)) continue;
       seen.add(origin);
       results.push(origin);
     }
@@ -223,6 +227,85 @@ export async function discoverFromSalesforceAgentExchange() {
 }
 
 // ---------------------------------------------------------------------------
+// CDP x402 Bazaar Discovery (the canonical x402 service directory)
+// ---------------------------------------------------------------------------
+
+/**
+ * CDP x402 Bazaar public discovery endpoint — the canonical directory of
+ * x402-enabled services on Base mainnet. Returns origin URLs (not routes)
+ * so the growth engine can probe each host for an outreach surface.
+ *
+ * @param {object} [options]
+ * @param {string} [options.apiUrl='https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources']
+ * @returns {Promise<string[]>} Unique origin URLs
+ */
+export async function discoverFromBazaar({ apiUrl } = {}) {
+  const url = apiUrl || 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
+  const res = await fetchSafe(url, {
+    headers: { 'User-Agent': 'desanatization-discoveries/1.0' },
+  });
+  if (res.status === 0 || !res.ok) return [];
+
+  try {
+    const data = JSON.parse(res.body);
+    const items = data?.items ?? data?.resources ?? data ?? [];
+    return collapseToOrigins(items);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// x402 Documentation Discovery (known services + guides)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scrape the x402 documentation site for links to known services, examples
+ * and partner directories. The docs site is a curated, low-noise source of
+ * x402-enabled projects — far better signal than generic web crawling.
+ *
+ * @returns {Promise<string[]>} Origin URLs of docs-referenced services
+ */
+export async function discoverFromX402Docs() {
+  const res = await fetchSafe('https://docs.x402.org', {
+    headers: { 'User-Agent': 'desanatization-discoveries/1.0 (x402 B2B outreach)' },
+  });
+  if (res.status === 0 || !res.ok) return [];
+  const urls = extractUrls(res.body);
+  return collapseToOrigins(urls);
+}
+
+// ---------------------------------------------------------------------------
+// AI Agent Directory Discovery (A2A-focused agent galleries)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scrape known AI agent directories and galleries for services that may
+ * support x402 payments. Targets agent marketplaces and framework galleries.
+ *
+ * @returns {Promise<string[]>} Origin URLs from agent directories
+ */
+export async function discoverFromAgentDirectories() {
+  const sources = [
+    'https://huggingface.co/models?sort=downloads',
+    'https://deepseek.com',
+    'https://www.perplexity.ai',
+    'https://claude.ai',
+    'https://chat.openai.com',
+  ];
+  const all = [];
+  for (const src of sources) {
+    const res = await fetchSafe(src, {
+      headers: { 'User-Agent': 'desanatization-discoveries/1.0 (x402 B2B outreach)' },
+    });
+    if (res.ok) {
+      for (const origin of collapseToOrigins(extractUrls(res.body))) all.push(origin);
+    }
+  }
+  return all;
+}
+
+// ---------------------------------------------------------------------------
 // Composite discovery: run all sources and merge results
 // ---------------------------------------------------------------------------
 
@@ -236,6 +319,9 @@ export async function discoverFromSalesforceAgentExchange() {
  * @param {boolean} [options.github=true] - Run GitHub discovery
  * @param {boolean} [options.googleCloud=true] - Run Google Cloud Agent Gallery discovery
  * @param {boolean} [options.salesforce=true] - Run Salesforce AgentExchange discovery
+ * @param {boolean} [options.bazaar=true] - Run CDP x402 Bazaar discovery
+ * @param {boolean} [options.agentDirs=true] - Run AI agent directory discovery
+ * @param {boolean} [options.x402docs=true] - Run x402 docs discovery
  * @param {Function} [options.log] - Logger for warnings (defaults to console.warn)
  * @returns {Promise<string[]>} Deduplicated origin URLs from all sources
  */
@@ -244,6 +330,9 @@ export async function discoverAll({
   github = true,
   googleCloud = true,
   salesforce = true,
+  bazaar = true,
+  agentDirs = true,
+  x402docs = true,
   log = console.warn,
 } = {}) {
   const tasks = [];
@@ -270,6 +359,33 @@ export async function discoverAll({
     tasks.push(
       discoverFromSalesforceAgentExchange().catch((error) => {
         log(`Salesforce AgentExchange discovery error: ${error.message}`);
+        return [];
+      }),
+    );
+  }
+
+  if (bazaar) {
+    tasks.push(
+      discoverFromBazaar().catch((error) => {
+        log(`CDP x402 Bazaar discovery error: ${error.message}`);
+        return [];
+      }),
+    );
+  }
+
+  if (x402docs) {
+    tasks.push(
+      discoverFromX402Docs().catch((error) => {
+        log(`x402 docs discovery error: ${error.message}`);
+        return [];
+      }),
+    );
+  }
+
+  if (agentDirs) {
+    tasks.push(
+      discoverFromAgentDirectories().catch((error) => {
+        log(`Agent directory discovery error: ${error.message}`);
         return [];
       }),
     );

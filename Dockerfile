@@ -16,9 +16,12 @@ WORKDIR /app
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
-COPY index.js app.js config.js x402.js logger.js sanitize.js growth.js agent.js cdp-auth.js notifications.js supervisor.js discoveries.js ./
+COPY index.js app.js config.js x402.js logger.js sanitize.js growth.js agent.js cdp-auth.js notifications.js supervisor.js discoveries.js a2a-commerce.js ./
 
 COPY middleware ./middleware
+
+# Create data directory before dropping privileges
+RUN mkdir -p data && chown node:node data
 
 # Drop privileges; the node image ships an unprivileged `node` user.
 USER node

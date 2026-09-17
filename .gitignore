@@ -12,3 +12,6 @@ Thumbs.db
 .idea
 .vscode/*
 !.vscode/extensions.json
+
+# Runtime data
+data/

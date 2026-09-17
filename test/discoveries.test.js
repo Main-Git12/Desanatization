@@ -111,7 +111,14 @@ describe('composite discovery', () => {
   });
 
   test('discoverAll skips disabled sources', async () => {
-    const results = await discoverAll({ github: false, googleCloud: false, salesforce: false });
+    const results = await discoverAll({
+      github: false,
+      googleCloud: false,
+      salesforce: false,
+      bazaar: false,
+      x402docs: false,
+      agentDirs: false,
+    });
     assert.deepEqual(results, []);
   });
 });

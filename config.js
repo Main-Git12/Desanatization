@@ -369,18 +369,51 @@ export function loadConfig(env = process.env) {
     growth: {
       enabled: readBool(env.GROWTH_ENABLED, 'GROWTH_ENABLED', problems, isProduction),
       targets: env.GROWTH_TARGETS,
-      // Seed targets: well-known x402 agent networks and service aggregators.
-      // The engine discovers more peers from the CDP Bazaar and expanded sources
-      // every cycle, but starting with a warm list gets the first pitches out
-      // within minutes, not hours.
+      // Seed targets: well-known x402 agent networks, service aggregators,
+      // and frameworks that embed or integrate x402. The engine discovers more
+      // peers from the CDP Bazaar + GitHub + agent galleries every cycle, but
+      // starting with a warm list gets the first pitches out within minutes.
+      // Prioritized: actual x402 services > frameworks with AI agent programs >
+      // major API providers that may embed x402 in their agent surfaces.
       seedTargets: isProduction
         ? JSON.stringify([
+            // Known x402 services (actual pay-to-use agents on Base mainnet)
             { url: 'https://x402.ottoai.services', kind: 'known-peer' },
+            { url: 'https://api.onesource.io', kind: 'known-peer' },
+            { url: 'https://stableenrich.dev', kind: 'known-peer' },
+            { url: 'https://api.exa.ai', kind: 'known-peer' },
+            { url: 'https://cheaptokens.ai', kind: 'known-peer' },
+            { url: 'https://crypto.apitoll.cloud', kind: 'known-peer' },
+            { url: 'https://kronossignals.com', kind: 'known-peer' },
+            { url: 'https://stableupload.dev', kind: 'known-peer' },
+            { url: 'https://laso.finance', kind: 'known-peer' },
+            { url: 'https://api.bitrefill.com', kind: 'known-peer' },
+            // AI agent frameworks with x402 integration paths
             { url: 'https://agno.com', kind: 'framework' },
             { url: 'https://langchain.com', kind: 'framework' },
-            { url: 'https://api.anthropic.com', kind: 'provider' },
             { url: 'https://openrouter.ai', kind: 'provider' },
+            { url: 'https://api.anthropic.com', kind: 'provider' },
             { url: 'https://api.openai.com', kind: 'provider' },
+            { url: 'https://agents.google.com', kind: 'framework' },
+            { url: 'https://www.anthropic.com', kind: 'provider' },
+            { url: 'https://docs.anthropic.com', kind: 'provider' },
+            { url: 'https://sdk.vercel.ai', kind: 'framework' },
+            { url: 'https://www.langchain.com', kind: 'framework' },
+            { url: 'https://python.langchain.com', kind: 'framework' },
+            { url: 'https://api.together.ai', kind: 'provider' },
+            { url: 'https://api.groq.com', kind: 'provider' },
+            { url: 'https://api.fireworks.ai', kind: 'provider' },
+            { url: 'https://api.cohere.ai', kind: 'provider' },
+            { url: 'https://api.replicate.com', kind: 'provider' },
+            { url: 'https://api.deepseek.com', kind: 'provider' },
+            { url: 'https://openai.com', kind: 'provider' },
+            { url: 'https://developers.cloudflare.com', kind: 'framework' },
+            { url: 'https://n8n.io', kind: 'framework' },
+            { url: 'https://www.make.com', kind: 'framework' },
+            { url: 'https://zapier.com', kind: 'framework' },
+            { url: 'https://huggingface.co', kind: 'provider' },
+            { url: 'https://claude.ai', kind: 'provider' },
+            { url: 'https://chat.openai.com', kind: 'provider' },
           ])
         : undefined,
       bazaarDiscovery: isProduction,
@@ -401,7 +434,7 @@ export function loadConfig(env = process.env) {
       publicUrl: String(
         env.GROWTH_PUBLIC_URL || env.PUBLIC_URL || env.RAILWAY_STATIC_URL || '',
       ).trim().replace(/\/+$/, '') || undefined,
-      intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 60_000 }, problems, 2 * 60 * 60_000),
+      intervalMs: readInt(env.GROWTH_INTERVAL_MS, 'GROWTH_INTERVAL_MS', { min: 15_000 }, problems, 2 * 60 * 60_000),
       maxPerCycle: readInt(env.GROWTH_MAX_PER_CYCLE, 'GROWTH_MAX_PER_CYCLE', { min: 1, max: 50 }, problems, 10),
       statePath: String(env.GROWTH_STATE_PATH || '').trim() || undefined,
       agentStatePath: String(env.GROWTH_AGENT_STATE_PATH || '').trim() || undefined,

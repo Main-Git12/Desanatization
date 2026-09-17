@@ -64,6 +64,69 @@ export const TOOLS = new Map([
     },
   ],
   [
+    'x402_bazaar',
+    async ({ query }) => {
+      /** Search the CDP x402 Bazaar for services matching a query. */
+      const searchUrl = query
+        ? `https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?query=${encodeURIComponent(query)}`
+        : 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources';
+      const res = await getSafe(searchUrl);
+      if (!res.ok) return { tool: 'x402_bazaar', ok: false, error: 'bazaar unreachable', status: res.status };
+      let parsed = [];
+      try {
+        const data = JSON.parse(res.body);
+        const items = data?.items ?? data?.resources ?? data;
+        parsed = Array.isArray(items) ? items : [];
+      } catch {
+        return { tool: 'x402_bazaar', ok: false, error: 'bazaar JSON parse failed' };
+      }
+      return {
+        tool: 'x402_bazaar',
+        query: query ?? '(all)',
+        ok: true,
+        services: parsed.slice(0, 20).map((s) => ({
+          name: s?.name ?? s?.serviceName ?? 'unknown',
+          url: s?.resource ?? s?.url ?? '',
+          price: s?.accepts?.[0]?.price ?? s?.price ?? null,
+          network: s?.accepts?.[0]?.network ?? s?.network ?? null,
+        })),
+      };
+    },
+  ],
+  [
+    'x402_pitch',
+    async ({ url, offer, fromUrl }) => {
+      /** Send a machine-readable x402-service-pitch to a peer's outreach surface. */
+      if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
+        return { error: 'x402_pitch needs an http(s) url' };
+      }
+      const pitch = {
+        type: 'x402-service-pitch',
+        from: fromUrl ?? 'https://desanatization.com',
+        service: {
+          name: 'Desanatization',
+          endpoint: 'https://desanatization.com/api/resource',
+          price: '$0.001',
+          network: 'eip155:8453',
+          freeTrial: 'https://desanatization.com/api/sanitize/trial',
+          docs: 'https://desanatization.com/llms.txt',
+        },
+        offer: offer ?? 'PII sanitization for AI agents over x402 (USDC on Base). Free trial, $0.001 per full job. Resell with your own ?ref= tag and earn 10% revenue share.',
+      };
+      for (const surface of ['/api/outreach', '/api/pitch', '/contact']) {
+        const attempt = await getSafeWithBody(`${url.replace(/\/+$/, '')}${surface}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pitch),
+        });
+        if (attempt.ok) {
+          return { tool: 'x402_pitch', ok: true, url, surface, status: attempt.status };
+        }
+      }
+      return { tool: 'x402_pitch', ok: false, url, error: 'no outreach surface accepted the pitch' };
+    },
+  ],
+  [
     'text_sanitize',
     async ({ text }) => {
       if (typeof text !== 'string' || text.length === 0 || text.length > 20_000) {
@@ -74,6 +137,23 @@ export const TOOLS = new Map([
     },
   ],
 ]);
+
+/**
+ * Fetch with timeout that supports POST bodies (for outbound pitching).
+ * Used by the x402_pitch tool only.
+ *
+ * @param {string} url - Absolute URL
+ * @param {RequestInit} [options] - fetch options with method/headers/body
+ * @returns {Promise<{status: number, body: string, ok: boolean}>}
+ */
+async function getSafeWithBody(url, options = {}) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000), ...options });
+    return { status: response.status, body: (await response.text()).slice(0, 2000), ok: response.ok };
+  } catch (error) {
+    return { status: 0, body: String(error?.message ?? error), ok: false };
+  }
+}
 
 /**
  * Choose the next step from the goal and everything observed so far. The
@@ -87,10 +167,35 @@ export const TOOLS = new Map([
 export function planNextStep(goal, trace) {
   const urlMatch = goal.match(/https?:\/\/[^\s]+/);
   const textPayload = goal.match(/sanitize:\s*([\s\S]+)/);
+  const findBuyersMatch = /find\s+buyers|seek.*x402.*clients|discover.*services/i.test(goal);
+  const pitchMatch = goal.match(/pitch\s+(https?:\/\/[^\s]+)/i);
 
   if (/sanitize/i.test(goal) && textPayload) {
     if (trace.length === 0) return { tool: 'text_sanitize', args: { text: textPayload[1] } };
     return null; // sanitize finishes in one deterministic step
+  }
+
+  // "find buyers" — search the CDP x402 Bazaar for services that might need our product
+  if (findBuyersMatch) {
+    if (trace.length === 0) return { tool: 'x402_bazaar', args: { query: 'ai agent' } };
+    const bazaarResult = trace.find((t) => t.result?.tool === 'x402_bazaar');
+    if (!bazaarResult) return { tool: 'x402_bazaar', args: { query: 'pii' } };
+    const services = bazaarResult.result.services ?? [];
+    const unpitched = services.filter((s) => s.url && !trace.some((t) => t.result?.url === s.url));
+    if (unpitched.length > 0) return { tool: 'x402_pitch', args: { url: unpitched[0].url } };
+    return null; // discovered and pitched all found services
+  }
+
+  // "pitch <url>" — discover a peer and pitch it
+  if (pitchMatch) {
+    const targetUrl = pitchMatch[1];
+    if (trace.length === 0) return { tool: 'x402_discover', args: { url: targetUrl } };
+    const discovery = trace[0]?.result;
+    if (trace.length === 1 && discovery?.tool === 'x402_discover' && discovery.isX402Peer) {
+      return { tool: 'x402_pitch', args: { url: targetUrl } };
+    }
+    if (trace.length === 1) return { tool: 'http_fetch', args: { url: targetUrl } };
+    return null;
   }
 
   if (urlMatch) {
@@ -98,8 +203,6 @@ export function planNextStep(goal, trace) {
     if (trace.length === 0) return { tool: 'x402_discover', args: { url } };
     const discovery = trace[0]?.result;
     if (trace.length === 1 && discovery?.tool === 'x402_discover' && discovery.isX402Peer) {
-      // Adapt to context: a confirmed x402 peer gets a docs fetch to learn
-      // its interface — we walk away with actionable knowledge of the peer.
       return { tool: 'http_fetch', args: { url: `${url.replace(/\/+$/, '')}/llms.txt` } };
     }
     if (trace.length === 1) return { tool: 'http_fetch', args: { url } };
@@ -121,6 +224,8 @@ export function isStepSuccessful(result) {
   if (!result || result.error) return false;
   if (result.tool === 'text_sanitize') return result.ok === true;
   if (result.tool === 'x402_discover') return typeof result.isX402Peer === 'boolean';
+  if (result.tool === 'x402_bazaar') return result.ok === true;
+  if (result.tool === 'x402_pitch') return result.ok === true;
   if (result.tool === 'http_fetch') return result.ok === true;
   return false;
 }

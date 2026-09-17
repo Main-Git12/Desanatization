@@ -20,6 +20,24 @@ export const PAYMENT_SIGNATURE_HEADER = 'payment-signature';
 export const LEGACY_PAYMENT_HEADER = 'x-payment';
 
 /**
+ * Wrap an async Express route handler so rejected promises are forwarded to
+ * Express's error middleware instead of hanging the request.
+ *
+ * Express 4.x does not automatically catch rejected promises from async
+ * route handlers; without this wrapper, a thrown error inside an `async
+ * (req, res) => { … }` handler produces an unhandled rejection (logged by the
+ * process-level handler) but never reaches the client via the error middleware.
+ *
+ * @param {Function} fn - Async route handler `(req, res, next) => Promise<any>`
+ * @returns {Function} Wrapped handler that calls `next(error)` on rejection
+ */
+export function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
+/**
  * Assign a unique, unguessable request ID for correlation.
  *
  * @param {object} req - Express request

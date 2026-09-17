@@ -29,6 +29,7 @@ import { createRateLimiter } from './middleware/rateLimiter.js';
 import { securityHeaders } from './middleware/security.js';
 import {
   assignRequestId,
+  asyncHandler,
   extractPaymentHeader,
   handleBodyParseErrors,
 } from './middleware/validation.js';
@@ -221,6 +222,30 @@ export function createApp({ config, logger, x402 }) {
     res.json({ ...getMetrics(), paywallReady: x402.isReady(), timestamp: new Date().toISOString() });
   });
 
+  // Revenue dashboard: a focused view of paid activity for operator sanity.
+  app.get('/api/revenue', requireMetricsToken(config), (req, res) => {
+    const metrics = getMetrics();
+    const insights = getInsights();
+    const totalUSDC = metrics.revenueAtomicByAsset['0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'] ?? '0';
+    res.json({
+      network: config.network,
+      price: config.price,
+      payTo: config.payToAddress,
+      paywallReady: x402.isReady(),
+      settledPayments: metrics.settledPayments,
+      failedPayments: metrics.failedPayments,
+      revenueAtomic: totalUSDC,
+      revenueUSD: Number(BigInt(totalUSDC)) / 1_000_000,
+      unpaidChallenges: metrics.paymentRequiredResponses,
+      conversion: insights.conversion,
+      retention: insights.retention,
+      referralRevenue: insights.referralRevenue,
+      recentReceipts: getRecentReceipts(10),
+      growthCycle: growthEngine.getStats(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Deep health: liveness + the auxiliary subsystems (notifications, agent
   // learning) so an operator can tell at a glance whether the automation
   // surfaces are armed, without opening every individual endpoint.
@@ -257,7 +282,7 @@ export function createApp({ config, logger, x402 }) {
   // Task agent: send it a goal, it plans -> acts -> observes -> learns. The
   // full trace comes back so every autonomous decision is auditable. A
   // repeated goal replays the learned skill; drift degrades and re-plans.
-  app.post('/api/agent/task', requireMetricsToken(config), async (req, res) => {
+   app.post('/api/agent/task', requireMetricsToken(config), asyncHandler(async (req, res) => {
     const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : '';
     if (!goal) {
       return res.status(400).json({
@@ -272,7 +297,7 @@ export function createApp({ config, logger, x402 }) {
     trackFunnel(outcome.ok ? 'agentTaskOk' : 'agentTask');
     const status = outcome.ok ? 200 : 502;
     return res.status(status).json({ ...outcome, timestamp: new Date().toISOString() });
-  });
+  }));
 
   // The agent's growth ledger: skills learned, replays, repairs, degradations.
   app.get('/api/agent/skills', requireMetricsToken(config), (req, res) => {
@@ -339,10 +364,11 @@ export function createApp({ config, logger, x402 }) {
   // is revenue we never see. All are public, static and cacheable.
   const discoveryDoc = (builder) => (req, res) => {
     const body = builder(config, req);
-    // Cacheable at the edge: the contents only change when config does.
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.type('application/json').send(JSON.stringify(body));
   };
+
+  const getBaseUrl = (req) => config.growth?.publicUrl || `${req.protocol}://${req.get('host')}`;
 
   app.get('/.well-known/x402', discoveryDoc(buildX402Discovery));
   app.get('/.well-known/x402.json', discoveryDoc(buildX402Discovery));
@@ -354,9 +380,9 @@ export function createApp({ config, logger, x402 }) {
   // Agents discover what we offer and at what price via this public, cacheable
   // endpoint. Critical for A2A commerce — without it, peer agents cannot
   // programmatically decide to route traffic or revenue to us.
-  app.get('/.well-known/catalog.json', (req, res) => {
+app.get('/.well-known/catalog.json', (req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.type('application/json').send(JSON.stringify(buildServiceCatalog(config, `${req.protocol}://${req.get('host')}`)));
+    res.type('application/json').send(JSON.stringify(buildServiceCatalog(config, getBaseUrl(req))));
   });
 
   // Proof of work: settled payments are public on-chain facts. Publishing
@@ -528,7 +554,7 @@ export function createApp({ config, logger, x402 }) {
   // --- A2A proxy endpoint ----------------------------------------------------
   // Agents pay us to route through our infrastructure to reach a peer service.
   // This creates a continuous commerce loop: agent → us → peer → us back.
-  const serveProxy = async (req, res) => {
+  const serveProxy = asyncHandler(async (req, res) => {
     const { targetUrl, text } = req.body ?? {};
     if (!targetUrl || typeof targetUrl !== 'string' || !text || typeof text !== 'string') {
       return res.status(400).json({
@@ -568,14 +594,14 @@ export function createApp({ config, logger, x402 }) {
         timestamp: new Date().toISOString(),
       });
     }
-  };
+  });
 
   app.post('/api/proxy', serveProxy);
 
   // --- A2A discovery endpoint ------------------------------------------------
   // Agents pay us to discover other x402 agents. We leverage our growth engine's
   // discovery infrastructure (GitHub, Bazaar, etc.) and return fresh peers.
-  const serveDiscover = async (req, res) => {
+  const serveDiscover = asyncHandler(async (req, res) => {
     const { query } = req.body ?? {};
     if (!query || typeof query !== 'string') {
       return res.status(400).json({
@@ -613,7 +639,7 @@ export function createApp({ config, logger, x402 }) {
         timestamp: new Date().toISOString(),
       });
     }
-  };
+  });
 
   app.post('/api/discover', serveDiscover);
 
@@ -718,7 +744,7 @@ payment is taken for a pitch — this is advertising, not a charge.
  * @returns {object} OpenAPI document
  */
 function buildOpenApi(config, req) {
-  const serverUrl = `${req.protocol}://${req.get('host')}`;
+  const serverUrl = config.growth?.publicUrl || `${req.protocol}://${req.get('host')}`;
   const sanitizeSchema = {
     type: 'object',
     required: ['text'],
@@ -927,7 +953,7 @@ With the official client the 402 → sign → retry loop is automatic:
  * @returns {object} Discovery document
  */
 function buildX402Discovery(config, req) {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = config.growth?.publicUrl || `${req.protocol}://${req.get('host')}`;
   const paidUrl = `${baseUrl}${config.resource.path}`;
 
   // Resolve $0.001 price strings to atomic USDC units (6 decimals).
@@ -1043,7 +1069,7 @@ function buildX402Discovery(config, req) {
  * @returns {object} MCP manifest
  */
 function buildMcpManifest(config, req) {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = config.growth?.publicUrl || `${req.protocol}://${req.get('host')}`;
   return {
     mcpVersion: '1.0',
     name: config.resource.serviceName,
@@ -1129,7 +1155,7 @@ function buildMcpManifest(config, req) {
  * @returns {object} Agent card
  */
 function buildAgentCard(config, req) {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = config.growth?.publicUrl || `${req.protocol}://${req.get('host')}`;
   return {
     name: config.resource.serviceName,
     description:
