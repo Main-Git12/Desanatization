@@ -290,6 +290,13 @@ export function loadConfig(env = process.env) {
 
   const price = normalisePrice(env.PRICE, problems);
 
+  // Batch (`/api/sanitize/batch`, 1-10 texts) settled at the same flat price
+  // as a single text was a ~90% effective discount for the heaviest users —
+  // see PRICING_INTEL.md. Give it its own, separately configurable price
+  // rather than reusing `price` for every item count.
+  const batchPriceRaw = String(env.BATCH_PRICE || '').trim();
+  const batchPrice = batchPriceRaw ? normalisePrice(env.BATCH_PRICE, problems) : '$0.10';
+
   const config = {
     nodeEnv,
     isProduction,
@@ -326,6 +333,7 @@ export function loadConfig(env = process.env) {
 
     network,
     price,
+    batchPrice,
     payToAddress,
     scheme: 'exact',
 
@@ -500,6 +508,7 @@ export function describeConfig(config) {
     environment: config.nodeEnv,
     network: config.network,
     price: config.price,
+    batchPrice: config.batchPrice,
     payTo: config.payToAddress,
     scheme: config.scheme,
     resourcePath: config.resource.path,
