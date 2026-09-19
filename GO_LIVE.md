@@ -48,7 +48,11 @@ Then set exactly these Railway variables:
 ```
 PAY_TO_ADDRESS=0x<your-real-wallet>          # not the demo address
 NETWORK=eip155:8453
-PRICE=$0.001
+PRICE=$0.01                                  # not $0.001 — see PRICING_INTEL.md:
+                                              # that's exactly the CDP facilitator's own
+                                              # per-settlement fee, a 100% facilitator take
+BATCH_PRICE=$0.10                            # /api/sanitize/batch — priced separately, not
+                                              # the same flat price as a single text
 FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402
 FACILITATOR_AUTH_HEADERS={"X-CDP-API-KEY-ID":"<id>","X-CDP-API-KEY-SECRET":"<secret>"}
 NODE_ENV=production

@@ -116,6 +116,53 @@ describe('x402 payment flow', () => {
     }
   });
 
+  test('batch is priced separately from a single text, not the same flat price', async () => {
+    const server = await startTestServer();
+    try {
+      const single = await server.fetch('/api/resource', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' }),
+      });
+      const singleChallenge = decodePaymentRequiredHeader(single.headers.get('payment-required'));
+      assert.equal(singleChallenge.accepts[0].amount, '1000', '$0.001 of a 6-decimal token');
+
+      const batch = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['hello', 'world'] }),
+      });
+      assert.equal(batch.status, 402);
+      const batchChallenge = decodePaymentRequiredHeader(batch.headers.get('payment-required'));
+      assert.equal(
+        batchChallenge.accepts[0].amount,
+        '100000',
+        '$0.10 of a 6-decimal token — the default BATCH_PRICE, not the $0.001 single-text price',
+      );
+      assert.notEqual(batchChallenge.accepts[0].amount, singleChallenge.accepts[0].amount);
+
+      const body = await batch.json();
+      assert.equal(body.accepts[0].price, '$0.10');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('BATCH_PRICE is configurable independently of PRICE', async () => {
+    const server = await startTestServer({ env: { BATCH_PRICE: '$0.25' } });
+    try {
+      const batch = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['hello'] }),
+      });
+      const challenge = decodePaymentRequiredHeader(batch.headers.get('payment-required'));
+      assert.equal(challenge.accepts[0].amount, '250000', '$0.25 of a 6-decimal token');
+    } finally {
+      await server.close();
+    }
+  });
+
   test('a signed payment is verified, settled, and unlocks the resource', async () => {
     resetMetrics();
     const server = await startTestServer();

@@ -69,6 +69,12 @@ describe('config', () => {
     assert.equal(config.resource.path, '/api/resource');
   });
 
+  test('BATCH_PRICE defaults to $0.10 and is independently configurable', () => {
+    assert.equal(loadConfig(baseEnv).batchPrice, '$0.10');
+    assert.equal(loadConfig({ ...baseEnv, BATCH_PRICE: '$0.25' }).batchPrice, '$0.25');
+    assert.equal(loadConfig({ ...baseEnv, PRICE: '$0.05' }).batchPrice, '$0.10', 'unaffected by PRICE');
+  });
+
   test('translates legacy x402 v1 network names to CAIP-2 and warns', () => {
     const config = loadConfig({ ...baseEnv, NETWORK: 'base-sepolia' });
     assert.equal(config.network, 'eip155:84532');

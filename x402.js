@@ -79,28 +79,39 @@ export function createFacilitatorClient(config) {
  * @returns {Record<string, object>} Routes config for the x402 middleware
  */
 export function buildRoutes(config, scheme) {
-  const accepts = [
-    {
-      scheme: config.scheme,
-      price: config.price,
-      network: config.network,
-      payTo: config.payToAddress,
-      maxTimeoutSeconds: config.maxTimeoutSeconds,
-    },
-  ];
-
-  // "$0.001" resolves against the scheme's local default-asset table (USDC per
-  // network) — no facilitator round trip, so this is safe and memoized.
-  let resolvedPrice = null;
-  const resolvePrice = async () => {
-    if (resolvedPrice === null) {
-      try {
-        resolvedPrice = await scheme.parsePrice(config.price, config.network);
-      } catch {
-        resolvedPrice = undefined;
+  // Each route price gets its own `accepts`/resolved-amount pair — batch
+  // (1-10 texts) is priced separately from a single text via
+  // `config.batchPrice`, rather than reusing `config.price` for every item
+  // count (see PRICING_INTEL.md on why that was a ~90% effective discount
+  // for the heaviest users).
+  const priceResolvers = new Map();
+  const forPrice = (price) => {
+    if (priceResolvers.has(price)) return priceResolvers.get(price);
+    const accepts = [
+      {
+        scheme: config.scheme,
+        price,
+        network: config.network,
+        payTo: config.payToAddress,
+        maxTimeoutSeconds: config.maxTimeoutSeconds,
+      },
+    ];
+    // "$0.001" resolves against the scheme's local default-asset table (USDC
+    // per network) — no facilitator round trip, so this is safe and memoized.
+    let resolvedPrice = null;
+    const resolvePrice = async () => {
+      if (resolvedPrice === null) {
+        try {
+          resolvedPrice = await scheme.parsePrice(price, config.network);
+        } catch {
+          resolvedPrice = undefined;
+        }
       }
-    }
-    return resolvedPrice;
+      return resolvedPrice;
+    };
+    const entry = { price, accepts, resolvePrice };
+    priceResolvers.set(price, entry);
+    return entry;
   };
 
   const discoverablePost = declareDiscoveryExtension({
@@ -271,56 +282,60 @@ export function buildRoutes(config, scheme) {
     },
   });
 
-  const makeRoute = (extensions) => ({
-    accepts,
-    description: config.resource.description,
-    mimeType: config.resource.mimeType,
-    serviceName: config.resource.serviceName,
-    // Bazaar discovery: this is what puts the endpoint in the x402
-    // catalog so agents can find it without a pre-baked integration.
-    extensions,
+  const makeRoute = (extensions, price = config.price) => {
+    const routePricing = forPrice(price);
+    return {
+      accepts: routePricing.accepts,
+      description: config.resource.description,
+      mimeType: config.resource.mimeType,
+      serviceName: config.resource.serviceName,
+      // Bazaar discovery: this is what puts the endpoint in the x402
+      // catalog so agents can find it without a pre-baked integration.
+      extensions,
 
-    unpaidResponseBody: async () => {
-      const resolved = await resolvePrice();
-      return {
-        contentType: 'application/json',
-        body: {
-          error: 'Payment required',
-          x402Version: 2,
-          protocol: 'x402',
-          requirementsHeader: 'PAYMENT-REQUIRED',
-          note:
-            'Machine-readable requirements are in the PAYMENT-REQUIRED response header; ' +
-            'this body mirrors them for convenience.',
-          accepts: [
-            {
-              scheme: config.scheme,
-              network: config.network,
-              payTo: config.payToAddress,
-              maxTimeoutSeconds: config.maxTimeoutSeconds,
-              price: config.price,
-              amount: resolved?.amount,
-              asset: resolved?.asset,
-              extra: resolved?.extra,
+      unpaidResponseBody: async () => {
+        const resolved = await routePricing.resolvePrice();
+        return {
+          contentType: 'application/json',
+          body: {
+            error: 'Payment required',
+            x402Version: 2,
+            protocol: 'x402',
+            requirementsHeader: 'PAYMENT-REQUIRED',
+            note:
+              'Machine-readable requirements are in the PAYMENT-REQUIRED response header; ' +
+              'this body mirrors them for convenience.',
+            accepts: [
+              {
+                scheme: config.scheme,
+                network: config.network,
+                payTo: config.payToAddress,
+                maxTimeoutSeconds: config.maxTimeoutSeconds,
+                price,
+                amount: resolved?.amount,
+                asset: resolved?.asset,
+                extra: resolved?.extra,
+              },
+            ],
+            resource: {
+              description: config.resource.description,
+              mimeType: config.resource.mimeType,
             },
-          ],
-          resource: {
-            description: config.resource.description,
-            mimeType: config.resource.mimeType,
+            hint:
+              'Sign a payment for one of the entries in "accepts" and retry the request with ' +
+              'it in the PAYMENT-SIGNATURE header (the legacy X-PAYMENT header is also accepted).',
           },
-          hint:
-            'Sign a payment for one of the entries in "accepts" and retry the request with ' +
-            'it in the PAYMENT-SIGNATURE header (the legacy X-PAYMENT header is also accepted).',
-        },
-      };
-    },
-  });
+        };
+      },
+    };
+  };
 
   return {
     [`GET ${config.resource.path}`]: makeRoute(discoverableGet),
     [`POST ${config.resource.path}`]: makeRoute(discoverablePost),
-    // Batch: one settlement, up to 10 texts — the volume buyer's route.
-    'POST /api/sanitize/batch': makeRoute(discoverableBatch),
+    // Batch: one settlement, up to 10 texts — priced separately from a
+    // single text via config.batchPrice (see PRICING_INTEL.md).
+    'POST /api/sanitize/batch': makeRoute(discoverableBatch, config.batchPrice),
     // A2A proxy: pay us to call a peer service on your behalf.
     'POST /api/proxy': makeRoute({
       discoverable: true,
