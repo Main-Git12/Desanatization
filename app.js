@@ -745,6 +745,16 @@ one settlement${JSON.stringify(config.batchPrice) === JSON.stringify(config.pric
 Redacts: emails, phone numbers, SSNs, credit-card numbers (Luhn-checked),
 private keys / API keys, Bearer tokens, URL tokens (?token=…).
 
+## MCP server (no wallet needed to start)
+If your agent speaks MCP, install the tool instead of integrating the HTTP API:
+
+  claude mcp add desanatization -- npx -y desanatization-mcp
+
+Tools: sanitize_text, sanitize_batch, sanitize_status. It runs in free-trial
+mode with no credentials at all; add CDP_* or DESANATIZATION_EVM_PRIVATE_KEY to
+process text longer than ${FREE_TIER_MAX_CHARS} characters.
+Source: https://github.com/Main-Git12/Desanatization/tree/main/mcp
+
 ## Endpoints
 - GET / — discovery (price, network, endpoints)
 - GET /llms.txt — this file
@@ -1117,7 +1127,32 @@ function buildMcpManifest(config, req) {
     name: config.resource.serviceName,
     version: '1.0.0',
     description: 'PII sanitization for AI agents, payable per call over x402 (USDC).',
-    transport: { type: 'http', url: `${baseUrl}${config.resource.path}` },
+
+    // The installable MCP surface is the stdio server in this repo's mcp/
+    // directory. This used to advertise `{ type: 'http', url: <paid
+    // endpoint> }`, which no MCP client could ever use: that URL is a plain
+    // JSON route behind an x402 paywall, so a client attempting an MCP
+    // handshake against it received a payment challenge and gave up. The
+    // REST endpoint is still described below — as what it actually is.
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'desanatization-mcp'],
+    },
+    install: {
+      claudeCode: 'claude mcp add desanatization -- npx -y desanatization-mcp',
+      source: 'https://github.com/Main-Git12/Desanatization/tree/main/mcp',
+      note:
+        `The free trial needs no wallet and no credentials. Set CDP_API_KEY_ID / ` +
+        `CDP_API_KEY_SECRET / CDP_WALLET_SECRET, or DESANATIZATION_EVM_PRIVATE_KEY, ` +
+        `to process text longer than ${FREE_TIER_MAX_CHARS} characters.`,
+    },
+    restEndpoint: {
+      method: 'POST',
+      url: `${baseUrl}${config.resource.path}`,
+      protocol: 'x402',
+      note: 'Plain JSON over HTTP behind an x402 paywall. This is not an MCP transport.',
+    },
     // The tool list is what an MCP client reads to decide to call us.
     tools: [
       {
