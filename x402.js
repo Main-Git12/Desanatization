@@ -79,10 +79,10 @@ export function createFacilitatorClient(config) {
  * @returns {Record<string, object>} Routes config for the x402 middleware
  */
 export function buildRoutes(config, scheme) {
-  const accepts = [
+  const acceptsFor = (price) => [
     {
       scheme: config.scheme,
-      price: config.price,
+      price,
       network: config.network,
       payTo: config.payToAddress,
       maxTimeoutSeconds: config.maxTimeoutSeconds,
@@ -90,17 +90,19 @@ export function buildRoutes(config, scheme) {
   ];
 
   // "$0.001" resolves against the scheme's local default-asset table (USDC per
-  // network) — no facilitator round trip, so this is safe and memoized.
-  let resolvedPrice = null;
-  const resolvePrice = async () => {
-    if (resolvedPrice === null) {
+  // network) — no facilitator round trip, so this is safe and memoized. Keyed
+  // by price since routes can each carry a different one (e.g. batch).
+  const resolvedPrices = new Map();
+  const resolvePrice = async (price) => {
+    const key = typeof price === 'string' ? price : JSON.stringify(price);
+    if (!resolvedPrices.has(key)) {
       try {
-        resolvedPrice = await scheme.parsePrice(config.price, config.network);
+        resolvedPrices.set(key, await scheme.parsePrice(price, config.network));
       } catch {
-        resolvedPrice = undefined;
+        resolvedPrices.set(key, undefined);
       }
     }
-    return resolvedPrice;
+    return resolvedPrices.get(key);
   };
 
   const discoverablePost = declareDiscoveryExtension({
@@ -271,8 +273,8 @@ export function buildRoutes(config, scheme) {
     },
   });
 
-  const makeRoute = (extensions) => ({
-    accepts,
+  const makeRoute = (extensions, price = config.price) => ({
+    accepts: acceptsFor(price),
     description: config.resource.description,
     mimeType: config.resource.mimeType,
     serviceName: config.resource.serviceName,
@@ -281,7 +283,7 @@ export function buildRoutes(config, scheme) {
     extensions,
 
     unpaidResponseBody: async () => {
-      const resolved = await resolvePrice();
+      const resolved = await resolvePrice(price);
       return {
         contentType: 'application/json',
         body: {
@@ -298,7 +300,7 @@ export function buildRoutes(config, scheme) {
               network: config.network,
               payTo: config.payToAddress,
               maxTimeoutSeconds: config.maxTimeoutSeconds,
-              price: config.price,
+              price,
               amount: resolved?.amount,
               asset: resolved?.asset,
               extra: resolved?.extra,
@@ -319,8 +321,9 @@ export function buildRoutes(config, scheme) {
   return {
     [`GET ${config.resource.path}`]: makeRoute(discoverableGet),
     [`POST ${config.resource.path}`]: makeRoute(discoverablePost),
-    // Batch: one settlement, up to 10 texts — the volume buyer's route.
-    'POST /api/sanitize/batch': makeRoute(discoverableBatch),
+    // Batch: one settlement, up to 10 texts — priced via BATCH_PRICE
+    // (defaults to the single-text price when unset, same as before).
+    'POST /api/sanitize/batch': makeRoute(discoverableBatch, config.batchPrice),
     // A2A proxy: pay us to call a peer service on your behalf.
     'POST /api/proxy': makeRoute({
       discoverable: true,

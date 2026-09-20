@@ -740,7 +740,7 @@ POST ${config.resource.path} — body { "text": "..." } (up to 20k chars).
 3. 200 returns { clean, redactions, inputChars, outputChars } + PAYMENT-RESPONSE receipt.
 
 Batch: POST /api/sanitize/batch with { "items": ["...", ...] } — up to 10 texts,
-one settlement, same price. Returns { count, results: [{ clean, redactions }...], totalRedactions }.
+one settlement${JSON.stringify(config.batchPrice) === JSON.stringify(config.price) ? ', same price as a single job' : ` for ${config.batchPrice}`}. Returns { count, results: [{ clean, redactions }...], totalRedactions }.
 
 Redacts: emails, phone numbers, SSNs, credit-card numbers (Luhn-checked),
 private keys / API keys, Bearer tokens, URL tokens (?token=…).
@@ -1011,6 +1011,7 @@ function buildX402Discovery(config, req) {
   };
 
   const atomicAmount = resolveAtomicAmount(config.price);
+  const batchAtomicAmount = resolveAtomicAmount(config.batchPrice);
 
   return {
     name: config.resource.serviceName,
@@ -1057,8 +1058,8 @@ function buildX402Discovery(config, req) {
           {
             scheme: config.scheme,
             network: config.network,
-            amount: atomicAmount,
-            price: config.price,
+            amount: batchAtomicAmount,
+            price: config.batchPrice,
             payTo: config.payToAddress,
             maxTimeoutSeconds: config.maxTimeoutSeconds,
           },
@@ -1171,7 +1172,7 @@ function buildMcpManifest(config, req) {
           version: 2,
           scheme: config.scheme,
           network: config.network,
-          price: config.price,
+          price: config.batchPrice,
           payTo: config.payToAddress,
         },
       },
