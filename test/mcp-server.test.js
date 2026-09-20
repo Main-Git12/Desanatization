@@ -9,6 +9,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createMcpServer } from '../mcp/server.mjs';
 
 const BASE = 'https://service.example';
@@ -278,6 +279,25 @@ describe('MCP server', () => {
 
     assert.equal(result.isError, true);
     assert.match(result.structuredContent.error, /ECONNREFUSED/);
+  });
+
+  test('the registry descriptor and the npm package agree on identity and version', () => {
+    // The MCP registry proves ownership by reading `mcpName` out of the
+    // published npm package and matching it against server.json's `name`.
+    // A drift between the two is not a warning — the publish is rejected,
+    // and the only symptom is a failed release nobody sees until they try.
+    const pkg = JSON.parse(readFileSync(new URL('../mcp/package.json', import.meta.url), 'utf8'));
+    const server = JSON.parse(readFileSync(new URL('../mcp/server.json', import.meta.url), 'utf8'));
+
+    assert.equal(server.name, pkg.mcpName, 'server.json name must equal package.json mcpName');
+    assert.match(pkg.mcpName, /^io\.github\.[a-z0-9-]+\/[a-z0-9-]+$/);
+    assert.equal(server.version, pkg.version, 'both files must be bumped together');
+
+    const [npmPackage] = server.packages;
+    assert.equal(npmPackage.identifier, pkg.name, 'the descriptor must point at this npm package');
+    assert.equal(npmPackage.version, pkg.version);
+    assert.equal(npmPackage.registryType, 'npm');
+    assert.equal(npmPackage.transport.type, 'stdio');
   });
 
   test('an unknown tool name is a tool error, not a dropped connection', async () => {

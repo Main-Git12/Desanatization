@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.main-git12/desanatization",
+  "description": "Redact PII — emails, phones, SSNs, credit cards, private keys and secrets — from text. Deterministic, no language model involved. Free trial needs no wallet; full-length text is pay-per-call over x402.",
+  "repository": {
+    "url": "https://github.com/Main-Git12/Desanatization",
+    "source": "github",
+    "subfolder": "mcp"
+  },
+  "websiteUrl": "https://desanatization-production.up.railway.app",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "desanatization-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

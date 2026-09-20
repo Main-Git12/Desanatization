@@ -1,5 +1,6 @@
 {
   "name": "desanatization-mcp",
+  "mcpName": "io.github.main-git12/desanatization",
   "version": "1.0.0",
   "description": "MCP server for PII sanitization — redact emails, phones, SSNs, cards and secrets from text. Free trial with no wallet; pay-per-call over x402 for full-length text.",
   "type": "module",
@@ -41,9 +42,17 @@
     "viem": "^2.56.5"
   },
   "peerDependenciesMeta": {
-    "@coinbase/cdp-sdk": { "optional": true },
-    "@x402/evm": { "optional": true },
-    "@x402/fetch": { "optional": true },
-    "viem": { "optional": true }
+    "@coinbase/cdp-sdk": {
+      "optional": true
+    },
+    "@x402/evm": {
+      "optional": true
+    },
+    "@x402/fetch": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
   }
 }

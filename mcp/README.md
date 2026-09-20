@@ -130,6 +130,28 @@ readable terms; the client signs an EIP-3009 authorization for exactly that
 amount and retries. No account, no API key, no subscription, no invoice — the
 first call from a funded wallet succeeds.
 
+## Releasing (maintainers)
+
+Two steps, in order. The npm package must exist first, because the registry
+verifies ownership by reading `mcpName` out of the published package.
+
+```bash
+cd mcp
+npm publish                 # publishes `desanatization-mcp`
+mcp-publisher login github  # authenticate as the io.github.main-git12 namespace
+mcp-publisher publish       # submits server.json to the official MCP registry
+```
+
+`server.json`'s `name` and `package.json`'s `mcpName` must stay identical —
+that pairing is the ownership proof, and a mismatch fails validation.
+
+Both are currently `io.github.main-git12/desanatization`, matching the
+repository owner. If you authenticate as a personal account rather than the
+organization, the namespace has to change to `io.github.<your-username>/…` in
+**both** files or the publish is rejected.
+
+Bump `version` in `package.json` and `server.json` together on every release.
+
 ## License
 
 MIT
