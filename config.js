@@ -294,8 +294,28 @@ export function loadConfig(env = process.env) {
   // gives volume buyers up to a 90% effective discount. Set BATCH_PRICE to
   // charge something between "same as single" and "10x single" once real
   // batch volume shows what buyers will actually pay.
+  //
+  // A malformed BATCH_PRICE degrades to PRICE with a warning instead of
+  // failing the boot. This is an optional pricing knob whose fallback (charge
+  // the single-text price — the behaviour before it existed) is well defined,
+  // so refusing to start would take a live, earning paywall down over
+  // something the service can safely carry on without.
   const rawBatchPrice = String(env.BATCH_PRICE ?? '').trim();
-  const batchPrice = rawBatchPrice ? normalisePrice(rawBatchPrice, problems) : price;
+  let batchPrice = price;
+  if (rawBatchPrice) {
+    /** @type {string[]} */
+    const batchPriceProblems = [];
+    const parsedBatchPrice = normalisePrice(rawBatchPrice, batchPriceProblems);
+    if (batchPriceProblems.length > 0) {
+      warnings.push(
+        `BATCH_PRICE is invalid and was ignored — the batch route falls back to PRICE (${
+          typeof price === 'string' ? price : JSON.stringify(price)
+        }). ${batchPriceProblems.join('; ')}`,
+      );
+    } else {
+      batchPrice = parsedBatchPrice;
+    }
+  }
 
   const config = {
     nodeEnv,
