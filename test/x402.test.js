@@ -116,6 +116,49 @@ describe('x402 payment flow', () => {
     }
   });
 
+  test('batch settles at the same price as a single job when BATCH_PRICE is unset', async () => {
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['a'] }),
+      });
+      assert.equal(response.status, 402);
+      const challenge = decodePaymentRequiredHeader(response.headers.get('payment-required'));
+      assert.equal(challenge.accepts[0].amount, '1000'); // same as the $0.001 single-job price
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('BATCH_PRICE prices the batch route independently of the single-job price', async () => {
+    const server = await startTestServer({ env: { BATCH_PRICE: '$0.005' } });
+    try {
+      const single = await server.fetch('/api/resource', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' }),
+      });
+      const single402 = decodePaymentRequiredHeader(single.headers.get('payment-required'));
+      assert.equal(single402.accepts[0].amount, '1000', 'single-job price is unaffected by BATCH_PRICE');
+
+      const batch = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['a', 'b', 'c'] }),
+      });
+      assert.equal(batch.status, 402);
+      const batch402 = decodePaymentRequiredHeader(batch.headers.get('payment-required'));
+      assert.equal(batch402.accepts[0].amount, '5000', '$0.005 of a 6-decimal token is 5000 units');
+
+      const batchBody = await batch.json();
+      assert.equal(batchBody.accepts[0].price, '$0.005');
+    } finally {
+      await server.close();
+    }
+  });
+
   test('a signed payment is verified, settled, and unlocks the resource', async () => {
     resetMetrics();
     const server = await startTestServer();

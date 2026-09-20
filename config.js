@@ -289,6 +289,13 @@ export function loadConfig(env = process.env) {
   }
 
   const price = normalisePrice(env.PRICE, problems);
+  // Batch settles up to BATCH_MAX_ITEMS texts in one call — pricing it the
+  // same as a single text (the historical default when BATCH_PRICE is unset)
+  // gives volume buyers up to a 90% effective discount. Set BATCH_PRICE to
+  // charge something between "same as single" and "10x single" once real
+  // batch volume shows what buyers will actually pay.
+  const rawBatchPrice = String(env.BATCH_PRICE ?? '').trim();
+  const batchPrice = rawBatchPrice ? normalisePrice(rawBatchPrice, problems) : price;
 
   const config = {
     nodeEnv,
@@ -326,6 +333,7 @@ export function loadConfig(env = process.env) {
 
     network,
     price,
+    batchPrice,
     payToAddress,
     scheme: 'exact',
 
