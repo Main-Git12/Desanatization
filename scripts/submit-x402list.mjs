@@ -71,12 +71,12 @@ const body = JSON.stringify({
   email: 'andrew.peal12@gmail.com',
   service_name: 'Desanatization',
   description:
-    'Deterministic PII sanitization for AI agents over x402 v2. Redacts emails, phones, SSNs, credit-card numbers, private keys, Bearer tokens and URL query secrets. Free trial for the first 500 chars, then $0.001 per full job on Base mainnet. Batch pricing available.',
+    'Deterministic PII sanitization for AI agents over x402 v2. Redacts emails, phones, SSNs, credit-card numbers, private keys, Bearer tokens and URL query secrets. Free trial for the first 500 chars, then $0.01 per full job on Base mainnet, or $0.08 for a batch of up to 10.',
   website_url: 'https://desanatization-production.up.railway.app',
   category: 'AI',
   endpoints: ['/api/resource', '/api/sanitize/trial', '/api/sanitize/batch'],
   notes:
-    'x402 v2 with CDP facilitator on Base mainnet. Bazaar discovery enabled. PayTo: 0x8d9372cdF4Cef4EBA4BA63D3552755aA476eDb92.',
+    'x402 v2 with CDP facilitator on Base mainnet. Bazaar discovery enabled. PayTo: 0x79e6cdb37c20bec46156c81d0c274827eb2754e4.',
 });
 
 async function main() {

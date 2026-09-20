@@ -16,7 +16,9 @@
     "log:review": "node scripts/log-review.mjs",
     "log:live": "node scripts/log-review.mjs --live",
     "preflight": "node scripts/preflight.mjs",
-    "verify:live": "node scripts/verify-live.mjs"
+    "verify:live": "node scripts/verify-live.mjs",
+    "bazaar:check": "node scripts/refresh-bazaar-listing.mjs --check",
+    "bazaar:refresh": "node scripts/refresh-bazaar-listing.mjs"
   },
   "keywords": [
     "x402",
