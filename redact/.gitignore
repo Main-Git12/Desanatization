@@ -1,0 +1,7 @@
+# Generated demo artifacts — regenerate with make_sample.py + redact_pdf.py.
+# Never commit PDFs here: the one thing this directory must not do is become a
+# place where a real record, or a copy of the PII we just removed, lands in git.
+*.pdf
+audit*.json
+__pycache__/
+*.pyc

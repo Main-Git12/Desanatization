@@ -36,6 +36,20 @@ describe('sanitize engine', () => {
     });
   });
 
+  test('does not redact a long ID as a phone number hiding inside it', () => {
+    // Regression: the phone pattern used to match a 13-digit slice *inside* a
+    // 16-digit parcel ID, so a public-records release would come back with the
+    // parcel number blacked out. Over-redaction is its own failure -- the
+    // requester is entitled to everything that is not exempt.
+    const result = sanitizeText('Officer badge 4417. Parcel ID 0123456789012345.');
+    assert.equal(result.clean, 'Officer badge 4417. Parcel ID 0123456789012345.');
+    assert.equal(result.redactions.phones, 0);
+
+    // ...while real phone numbers are still caught.
+    const phones = sanitizeText('Call (614) 555-0182 or 614-555-0199');
+    assert.equal(phones.redactions.phones, 2);
+  });
+
   test('does not mangle plain digit runs (Luhn + length guards)', () => {
     const result = sanitizeText('order 12345 shipped in 2024');
     assert.equal(result.clean, 'order 12345 shipped in 2024');
