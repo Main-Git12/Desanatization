@@ -61,14 +61,24 @@ const MAX_PER_PAYMENT = process.env.MAX_PER_PAYMENT || '$0.50';
 // to run just to see whether the listing has drifted.
 const CHECK_ONLY = process.argv.includes('--check');
 
-const required = ['CDP_API_KEY_ID', 'CDP_API_KEY_SECRET', 'CDP_WALLET_SECRET'];
-const missing = CHECK_ONLY ? [] : required.filter((key) => !process.env[key]);
-if (missing.length > 0) {
-  console.error(`Missing required environment variable(s): ${missing.join(', ')}`);
+// Two ways to pay, checked in order. A CDP Server Wallet keeps the signing key
+// on Coinbase's infrastructure and is the better default — but it requires an
+// API key and a wallet secret generated in the SAME CDP project, which is easy
+// to get wrong and fails as an opaque 401. PAYER_PRIVATE_KEY is the escape
+// hatch: any funded Base wallet can settle this, and the payer needs no ETH
+// because the `exact` scheme signs an EIP-3009 authorization off-chain and the
+// facilitator submits (and pays gas for) the transaction.
+const PAYER_PRIVATE_KEY = process.env.PAYER_PRIVATE_KEY || process.env.EVM_PRIVATE_KEY || '';
+const hasCdpCredentials =
+  process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET && process.env.CDP_WALLET_SECRET;
+
+if (!CHECK_ONLY && !PAYER_PRIVATE_KEY && !hasCdpCredentials) {
+  console.error('No way to pay is configured. Provide either:');
   console.error(
-    'CDP_API_KEY_ID/CDP_API_KEY_SECRET are the same CDP API key this repo already uses for ' +
-      'the facilitator. CDP_WALLET_SECRET is separate — generate it in the CDP portal under ' +
-      'Server Wallets. No raw private key is involved in either.',
+    '  PAYER_PRIVATE_KEY=0x…  a funded Base wallet (USDC only — no ETH needed for gas), or',
+  );
+  console.error(
+    '  CDP_API_KEY_ID + CDP_API_KEY_SECRET + CDP_WALLET_SECRET, all from the SAME CDP project.',
   );
   process.exit(1);
 }
@@ -173,7 +183,9 @@ if (before && before.accepts?.[0]) {
 if (CHECK_ONLY) {
   console.log(
     drifted
-      ? '\n--check only: nothing was paid. Re-run without --check (with CDP credentials) to fix it.'
+      ? '\n--check only: nothing was paid. To fix it, re-run without --check and with a way to ' +
+          'pay:\n  PAYER_PRIVATE_KEY=0x… npm run bazaar:refresh\n' +
+          '(any Base wallet holding a little USDC — no ETH needed, the facilitator pays gas)'
       : '\n--check only: nothing was paid.',
   );
   process.exit(drifted ? 2 : 0);
@@ -181,25 +193,40 @@ if (CHECK_ONLY) {
 
 // Imported after the credential check so a missing `npm install` reports
 // itself plainly instead of as a raw module-resolution stack trace.
-let CdpX402Client;
-try {
-  ({ CdpX402Client } = await import('@coinbase/cdp-sdk/x402'));
-} catch (error) {
-  console.error(`Could not load @coinbase/cdp-sdk: ${error?.message ?? error}`);
-  console.error('It is a declared dependency — run `npm install` in this repo first.');
-  process.exit(1);
+let client;
+
+if (PAYER_PRIVATE_KEY) {
+  const { privateKeyToAccount } = await import('viem/accounts');
+  const { x402Client } = await import('@x402/fetch');
+  const { ExactEvmScheme } = await import('@x402/evm/exact/client');
+
+  const account = privateKeyToAccount(
+    PAYER_PRIVATE_KEY.startsWith('0x') ? PAYER_PRIVATE_KEY : `0x${PAYER_PRIVATE_KEY}`,
+  );
+  client = new x402Client();
+  // Hard ceiling on a single payment, independent of whatever the challenge
+  // claims — defense in depth against a misbehaving or spoofed endpoint.
+  client.setSpendControls({ maxAmountPerPayment: MAX_PER_PAYMENT });
+  client.register(terms.network, new ExactEvmScheme(account));
+  console.log(`Paying from local key: ${account.address} (no ETH required — facilitator pays gas)`);
+} else {
+  let CdpX402Client;
+  try {
+    ({ CdpX402Client } = await import('@coinbase/cdp-sdk/x402'));
+  } catch (error) {
+    console.error(`Could not load @coinbase/cdp-sdk: ${error?.message ?? error}`);
+    console.error('It is a declared dependency — run `npm install` in this repo first.');
+    process.exit(1);
+  }
+
+  client = new CdpX402Client(
+    process.env.CDP_X402_ENVIRONMENT === 'development' ? { environment: 'development' } : {},
+  );
+  client.setSpendControls?.({ maxAmountPerPayment: MAX_PER_PAYMENT });
+
+  const { evmAddress } = await client.getAddresses();
+  console.log(`CDP-managed wallet: ${evmAddress}`);
 }
-
-const client = new CdpX402Client(
-  process.env.CDP_X402_ENVIRONMENT === 'development' ? { environment: 'development' } : {},
-);
-
-// Hard ceiling on a single payment, independent of whatever the challenge
-// claims — defense in depth against a misbehaving or spoofed endpoint.
-client.setSpendControls?.({ maxAmountPerPayment: MAX_PER_PAYMENT });
-
-const { evmAddress } = await client.getAddresses();
-console.log(`CDP-managed wallet: ${evmAddress}`);
 
 const httpClient = new x402HTTPClient(client);
 const fetchWithPayment = wrapFetchWithPayment(fetch, client);
