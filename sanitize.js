@@ -16,6 +16,15 @@ export const MAX_OUTPUT_CHARS = 20_000;
 /** Free-tier input cap: enough to verify quality, small enough to upsell. */
 export const FREE_TIER_MAX_CHARS = 500;
 
+/**
+ * Where the free trial lives. Declared here beside its cap rather than
+ * inlined at each use, because the 402 challenge, the landing page, the
+ * agent card and the route itself all have to name the same path — and a
+ * discovery document advertising a path that has moved is precisely the
+ * silent-failure mode that has already cost this service sales once.
+ */
+export const FREE_TRIAL_PATH = '/api/sanitize/trial';
+
 /** Maximum items per paid batch call: one settlement, up to N texts. */
 export const BATCH_MAX_ITEMS = 10;
 
