@@ -116,6 +116,55 @@ describe('x402 payment flow', () => {
     }
   });
 
+  test('the 402 body points a wallet-less agent at the free trial', async () => {
+    const server = await startTestServer();
+    try {
+      // An agent that hits the paywall and cannot pay is the cheapest buyer
+      // we will ever get a second chance at — but only if the 402 tells it
+      // there is a free way to see the output work.
+      const response = await server.fetch('/api/resource', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' }),
+      });
+      assert.equal(response.status, 402);
+
+      const { freeTrial } = await response.json();
+      assert.equal(freeTrial.endpoint, '/api/sanitize/trial');
+      assert.equal(freeTrial.method, 'POST');
+      assert.equal(freeTrial.maxChars, 500);
+      assert.match(freeTrial.cost, /free/i);
+
+      // The advertised endpoint must actually exist and be free — a 402 that
+      // points at a dead path is worse than one that points nowhere.
+      const trial = await server.fetch(freeTrial.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Contact jane@example.com' }),
+      });
+      assert.equal(trial.status, 200);
+      assert.equal((await trial.json()).clean, 'Contact [redacted-email]');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('the batch 402 also advertises the trial, and says the trial is single-text only', async () => {
+    const server = await startTestServer();
+    try {
+      const response = await server.fetch('/api/sanitize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: ['a'] }),
+      });
+      const { freeTrial } = await response.json();
+      assert.equal(freeTrial.endpoint, '/api/sanitize/trial');
+      assert.match(freeTrial.note, /batch route has no trial/);
+    } finally {
+      await server.close();
+    }
+  });
+
   test('batch settles at the same price as a single job when BATCH_PRICE is unset', async () => {
     const server = await startTestServer();
     try {

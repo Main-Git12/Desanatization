@@ -89,7 +89,13 @@ describe('growth loop', () => {
 
       const skill = await server.fetch('/skill.md');
       assert.equal(skill.status, 200);
-      assert.match(await skill.text(), /PAYMENT-SIGNATURE/);
+      const skillText = await skill.text();
+      assert.match(skillText, /PAYMENT-SIGNATURE/);
+      // skill.md exists to be copy-pasted. A curl whose URL is a bare path
+      // fails the moment anyone runs it, which is the worst possible first
+      // impression for a doc whose whole job is "try this now".
+      assert.match(skillText, /curl -X POST https?:\/\/[^\s]+\/api\/sanitize\/trial/);
+      assert.doesNotMatch(skillText, /curl -X POST \/api/);
 
       const home = await server.fetch('/');
       assert.match((await home.json()).product.freeTrial, /trial/);

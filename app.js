@@ -38,6 +38,7 @@ import {
 import {
   BATCH_MAX_ITEMS,
   FREE_TIER_MAX_CHARS,
+  FREE_TRIAL_PATH,
   MAX_INPUT_CHARS,
   cacheStats,
   sanitizeCached,
@@ -207,7 +208,7 @@ export function createApp({ config, logger, x402 }) {
       },
       product: {
         sanitize: `POST ${config.resource.path}`,
-        freeTrial: `POST /api/sanitize/trial (first ${FREE_TIER_MAX_CHARS} chars, no payment)`,
+        freeTrial: `POST ${FREE_TRIAL_PATH} (first ${FREE_TIER_MAX_CHARS} chars, no payment)`,
         batch: 'POST /api/sanitize/batch (up to 10 texts, one settlement)',
         proof: 'GET /receipts (settled payments, public)',
         docs: 'GET /llms.txt',
@@ -395,7 +396,7 @@ export function createApp({ config, logger, x402 }) {
   });
 
   app.get('/skill.md', (req, res) => {
-    res.type('text/markdown').send(buildSkillMd(config));
+    res.type('text/markdown').send(buildSkillMd(config, getBaseUrl(req)));
   });
 
   // --- Machine discovery files ----------------------------------------------
@@ -445,7 +446,7 @@ app.get('/.well-known/catalog.json', (req, res) => {
   // --- Free trial: taste before paying --------------------------------------
   // Same deterministic engine, capped input. Converts window-shoppers into
   // buyers: the 200 response carries the paid upsell inline.
-  app.post('/api/sanitize/trial', (req, res) => {
+  app.post(FREE_TRIAL_PATH, (req, res) => {
     const { text, error } = validateSanitizeBody(req.body);
     if (error) {
       // Self-service hint: a recoverable 400 keeps the agent in the funnel —
@@ -731,7 +732,7 @@ function buildLlmsTxt(config) {
   return `# ${config.resource.serviceName} — PII sanitization for AI agents
 
 Pay ${config.price} per sanitize job over x402 v2 (${config.network}, USDC).
-Free trial: POST /api/sanitize/trial with { "text": "..." } — first ${FREE_TIER_MAX_CHARS} chars, no payment.
+Free trial: POST ${FREE_TRIAL_PATH} with { "text": "..." } — first ${FREE_TIER_MAX_CHARS} chars, no payment.
 
 ## Paid endpoint
 POST ${config.resource.path} — body { "text": "..." } (up to 20k chars).
@@ -760,7 +761,7 @@ Source: https://github.com/Main-Git12/Desanatization/tree/main/mcp
 - GET /llms.txt — this file
 - GET /openapi.json — typed contract for tool-calling
 - GET /skill.md — drop-in agent skill
-- POST /api/sanitize/trial — free trial (no payment)
+- POST ${FREE_TRIAL_PATH} — free trial (no payment)
 - POST ${config.resource.path} — paid sanitize (x402)
 - POST /api/sanitize/batch — paid batch: up to 10 texts, one settlement
 - POST /api/outreach — leave us a machine-readable pitch (see below)
@@ -825,7 +826,7 @@ function buildOpenApi(config, req) {
     info: {
       title: `${config.resource.serviceName} — PII sanitization`,
       version: '1.0.0',
-      description: `Sanitize text over x402 v2. Paid: POST ${config.resource.path} (${config.price} on ${config.network}). Free trial: POST /api/sanitize/trial.`,
+      description: `Sanitize text over x402 v2. Paid: POST ${config.resource.path} (${config.price} on ${config.network}). Free trial: POST ${FREE_TRIAL_PATH}.`,
     },
     servers: [{ url: serverUrl }],
     paths: {
@@ -839,7 +840,7 @@ function buildOpenApi(config, req) {
           },
         },
       },
-      '/api/sanitize/trial': {
+      [FREE_TRIAL_PATH]: {
         post: {
           summary: 'Sanitize text (free trial, capped)',
           requestBody: { required: true, content: { 'application/json': { schema: sanitizeSchema } } },
@@ -969,22 +970,23 @@ function buildOpenApi(config, req) {
  * Drop-in agent skill: copy-paste instructions for any coding agent.
  *
  * @param {object} config - Loaded configuration
+ * @param {string} baseUrl - Absolute service URL, so the examples are runnable
  * @returns {string} skill.md content
  */
-function buildSkillMd(config) {
+function buildSkillMd(config, baseUrl) {
   return `# ${config.resource.serviceName} skill — sanitize PII before logging / training / sharing
 
 Use this when handling user text that may contain emails, phones, SSNs, card numbers, or secrets.
 
 ## Try free (no wallet)
 \`\`\`bash
-curl -X POST ${config.resource.path.replace('/api/resource', '/api/sanitize/trial')} \\
+curl -X POST ${baseUrl}${FREE_TRIAL_PATH} \\
   -H 'Content-Type: application/json' \\
   -d '{"text":"Contact me at jane@example.com or 555-123-4567"}'
 \`\`\`
 
 ## Pay per full job (${config.price} on ${config.network}, USDC via x402)
-1. POST ${config.resource.path} with \`{ "text": "..." }\` → expect 402.
+1. POST ${baseUrl}${config.resource.path} with \`{ "text": "..." }\` → expect 402.
 2. Read the \`PAYMENT-REQUIRED\` header (amount, asset, payTo, network).
 3. Sign an exact payment, retry with \`PAYMENT-SIGNATURE\` header.
 4. 200 returns \`{ clean, redactions, inputChars, outputChars }\`; keep the \`PAYMENT-RESPONSE\` receipt.
@@ -1051,7 +1053,7 @@ function buildX402Discovery(config, req) {
         ],
       },
       {
-        url: `${baseUrl}/api/sanitize/trial`,
+        url: `${baseUrl}${FREE_TRIAL_PATH}`,
         method: 'POST',
         description: `Free trial: first ${FREE_TIER_MAX_CHARS} characters at no cost, no wallet required.`,
         mimeType: 'application/json',
@@ -1103,7 +1105,7 @@ function buildX402Discovery(config, req) {
       receipts: `${baseUrl}/receipts`,
       mcp: `${baseUrl}/.well-known/mcp.json`,
     },
-    freeTrial: `${baseUrl}/api/sanitize/trial`,
+    freeTrial: `${baseUrl}${FREE_TRIAL_PATH}`,
     contact: `${baseUrl}/llms.txt`,
     updatedAt: new Date().toISOString(),
   };
@@ -1268,7 +1270,7 @@ function buildAgentCard(config, req) {
       price: config.price,
       payTo: config.payToAddress,
       paidEndpoint: `${baseUrl}${config.resource.path}`,
-      freeTrialEndpoint: `${baseUrl}/api/sanitize/trial`,
+      freeTrialEndpoint: `${baseUrl}${FREE_TRIAL_PATH}`,
     },
     discovery: {
       x402: `${baseUrl}/.well-known/x402.json`,

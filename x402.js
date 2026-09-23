@@ -15,6 +15,7 @@ import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { paymentMiddlewareFromHTTPServer } from '@x402/express';
 import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { createCdpAuthHeaders } from './cdp-auth.js';
+import { FREE_TIER_MAX_CHARS, FREE_TRIAL_PATH } from './sanitize.js';
 
 /**
  * Build a facilitator HTTP client, adding auth headers when configured.
@@ -313,6 +314,22 @@ export function buildRoutes(config, scheme) {
           hint:
             'Sign a payment for one of the entries in "accepts" and retry the request with ' +
             'it in the PAYMENT-SIGNATURE header (the legacy X-PAYMENT header is also accepted).',
+
+          // An agent that reaches this point wanted the service and could not
+          // pay for it — no wallet, no funds, or no x402 support. Without a
+          // next step it simply leaves, and we never learn it was here. The
+          // free trial costs us nothing and converts that dead end into a
+          // buyer who has already seen the output work.
+          freeTrial: {
+            endpoint: FREE_TRIAL_PATH,
+            method: 'POST',
+            body: { text: 'your text here' },
+            maxChars: FREE_TIER_MAX_CHARS,
+            cost: 'free — no payment, no wallet, no account, no signup',
+            note:
+              `Sanitizes the first ${FREE_TIER_MAX_CHARS} characters at no cost so you can ` +
+              'verify the output before paying. Single text only; the batch route has no trial.',
+          },
         },
       };
     },
