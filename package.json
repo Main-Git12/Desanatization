@@ -18,7 +18,8 @@
     "preflight": "node scripts/preflight.mjs",
     "verify:live": "node scripts/verify-live.mjs",
     "bazaar:check": "node scripts/refresh-bazaar-listing.mjs --check",
-    "bazaar:refresh": "node scripts/refresh-bazaar-listing.mjs"
+    "bazaar:refresh": "node scripts/refresh-bazaar-listing.mjs",
+    "mcp": "node mcp/server.mjs"
   },
   "keywords": [
     "x402",

@@ -94,6 +94,24 @@ describe('machine discovery', () => {
 
       // A batch tool is the volume buyer's entry point — keep it discoverable.
       assert.ok(manifest.tools.some((t) => t.name === 'text_sanitize_batch'));
+
+      // The advertised transport has to be one an MCP client can actually
+      // speak. This previously claimed `{ type: 'http', url: <paid route> }`
+      // — a plain JSON endpoint behind a paywall, so any client that took the
+      // manifest at its word got a 402 instead of a handshake and gave up.
+      assert.equal(manifest.transport.type, 'stdio');
+      assert.equal(manifest.transport.command, 'npx');
+      assert.ok(manifest.transport.args.includes('desanatization-mcp'));
+      assert.notEqual(
+        manifest.transport.url,
+        `${server.config.resource.path}`,
+        'the paid REST route is not an MCP transport',
+      );
+
+      // …and the REST route is still described, labelled for what it is.
+      assert.match(manifest.restEndpoint.url, /\/api\/resource$/);
+      assert.equal(manifest.restEndpoint.protocol, 'x402');
+      assert.match(manifest.install.claudeCode, /^claude mcp add /);
     } finally {
       await server.close();
     }
