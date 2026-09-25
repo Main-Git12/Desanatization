@@ -1,0 +1,31 @@
+# ============================================================================
+# AI Privacy Gateway — separate image from the x402 product's Dockerfile.
+#
+# Deliberately its own image/deploy target: this product has a different
+# buyer, a different auth model, and per the product roadmap must never share
+# a brand surface or a deployment with the x402 agent-economy product.
+# ============================================================================
+
+FROM node:22-alpine AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+FROM node:22-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY package.json ./
+COPY detectors.js net-safety.js logger.js ./
+COPY gateway ./gateway
+
+RUN mkdir -p data && chown node:node data
+USER node
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.GATEWAY_PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "gateway/index.js"]

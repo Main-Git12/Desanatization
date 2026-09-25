@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "gateway": "node gateway/index.js",
+    "gateway:dev": "node --watch gateway/index.js",
     "test": "NODE_ENV=test node --test 'test/**/*.js'",
     "test:watch": "NODE_ENV=test node --test --watch 'test/**/*.js'",
     "client": "node clients/fetch-client.mjs",
