@@ -36,6 +36,20 @@ describe('sanitize engine', () => {
     });
   });
 
+  test('does not redact a long ID as a phone number hiding inside it', () => {
+    // Regression: the phone pattern used to match a 13-digit slice *inside* a
+    // 16-digit parcel ID, so a public-records release would come back with the
+    // parcel number blacked out. Over-redaction is its own failure -- the
+    // requester is entitled to everything that is not exempt.
+    const result = sanitizeText('Officer badge 4417. Parcel ID 0123456789012345.');
+    assert.equal(result.clean, 'Officer badge 4417. Parcel ID 0123456789012345.');
+    assert.equal(result.redactions.phones, 0);
+
+    // ...while real phone numbers are still caught.
+    const phones = sanitizeText('Call (614) 555-0182 or 614-555-0199');
+    assert.equal(phones.redactions.phones, 2);
+  });
+
   test('does not mangle plain digit runs (Luhn + length guards)', () => {
     const result = sanitizeText('order 12345 shipped in 2024');
     assert.equal(result.clean, 'order 12345 shipped in 2024');
@@ -89,7 +103,13 @@ describe('growth loop', () => {
 
       const skill = await server.fetch('/skill.md');
       assert.equal(skill.status, 200);
-      assert.match(await skill.text(), /PAYMENT-SIGNATURE/);
+      const skillText = await skill.text();
+      assert.match(skillText, /PAYMENT-SIGNATURE/);
+      // skill.md exists to be copy-pasted. A curl whose URL is a bare path
+      // fails the moment anyone runs it, which is the worst possible first
+      // impression for a doc whose whole job is "try this now".
+      assert.match(skillText, /curl -X POST https?:\/\/[^\s]+\/api\/sanitize\/trial/);
+      assert.doesNotMatch(skillText, /curl -X POST \/api/);
 
       const home = await server.fetch('/');
       assert.match((await home.json()).product.freeTrial, /trial/);

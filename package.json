@@ -18,7 +18,10 @@
     "log:review": "node scripts/log-review.mjs",
     "log:live": "node scripts/log-review.mjs --live",
     "preflight": "node scripts/preflight.mjs",
-    "verify:live": "node scripts/verify-live.mjs"
+    "verify:live": "node scripts/verify-live.mjs",
+    "bazaar:check": "node scripts/refresh-bazaar-listing.mjs --check",
+    "bazaar:refresh": "node scripts/refresh-bazaar-listing.mjs",
+    "mcp": "node mcp/server.mjs"
   },
   "keywords": [
     "x402",
@@ -30,6 +33,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.52.0",
     "@x402/core": "~2.26.0",
     "@x402/evm": "~2.26.0",
     "@x402/express": "~2.26.0",

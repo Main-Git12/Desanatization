@@ -100,6 +100,7 @@ process exits rather than serving traffic that can never be paid.
 | `PAY_TO_ADDRESS` | **yes** | – | Your EVM wallet address (42 chars, `0x…`). USDC settles here |
 | `NETWORK` | no | `eip155:84532` | CAIP-2: `eip155:8453` (Base), `eip155:84532` (Base Sepolia) |
 | `PRICE` | no | `$0.001` | Dollar string resolved to the network's USDC, or JSON `{"asset":"0x…","amount":"1000"}` |
+| `BATCH_PRICE` | no | same as `PRICE` | Price for `POST /api/sanitize/batch` (up to 10 texts, one settlement) |
 | `FACILITATOR_URL` | no | `https://x402.org/facilitator` | Verifies and settles payments (testnet only by default) |
 | `FACILITATOR_AUTH_HEADER` | no | – | `Authorization` value for facilitators that require a key |
 | `FACILITATOR_TIMEOUT_MS` | no | `20000` | Per-request facilitator timeout |

@@ -13,8 +13,13 @@
 
 const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const CREDIT_CARD_PATTERN = /\b(?:\d[ -]?){13,19}\b/g;
+// The leading (?<!\d) is load-bearing: without it the pattern happily matches a
+// 13-digit slice *inside* a longer digit run, so a 16-digit parcel ID, case
+// number or account number gets redacted as a phone number. Over-redaction is
+// its own failure -- a public-records requester is entitled to everything that
+// is not exempt, and silently blacking out a parcel ID is a defect, not caution.
 const PHONE_PATTERN =
-  /(\+?1[-.\s]?)?(\(?\d{3}\)?[-.\s]?){1,2}\d{3}[-.\s]?\d{4}(?!\d)/g;
+  /(?<!\d)(\+?1[-.\s]?)?(\(?\d{3}\)?[-.\s]?){1,2}\d{3}[-.\s]?\d{4}(?!\d)/g;
 const SSN_PATTERN = /\b\d{3}-\d{2}-\d{4}\b/g;
 const PRIVATE_KEY_PATTERN =
   /\b(?:0x)?[0-9a-fA-F]{64}\b|\bsk-[a-zA-Z0-9]{8,}\b|\bAKIA[0-9A-Z]{16}\b/g;

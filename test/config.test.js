@@ -69,6 +69,22 @@ describe('config', () => {
     assert.equal(config.resource.path, '/api/resource');
   });
 
+  test('BATCH_PRICE defaults to PRICE and is used when valid', () => {
+    assert.equal(loadConfig(baseEnv).batchPrice, '$0.001');
+    assert.equal(loadConfig({ ...baseEnv, BATCH_PRICE: '$0.005' }).batchPrice, '$0.005');
+  });
+
+  test('a malformed BATCH_PRICE warns and falls back to PRICE instead of failing the boot', () => {
+    // An optional pricing knob must never be able to take a live paywall
+    // down: the batch route just charges the single-text price instead.
+    const config = loadConfig({ ...baseEnv, PRICE: '$0.01', BATCH_PRICE: 'free' });
+    assert.equal(config.batchPrice, '$0.01');
+    assert.ok(
+      config.warnings.some((w) => /BATCH_PRICE is invalid/.test(w)),
+      `expected a BATCH_PRICE warning, got: ${JSON.stringify(config.warnings)}`,
+    );
+  });
+
   test('translates legacy x402 v1 network names to CAIP-2 and warns', () => {
     const config = loadConfig({ ...baseEnv, NETWORK: 'base-sepolia' });
     assert.equal(config.network, 'eip155:84532');
